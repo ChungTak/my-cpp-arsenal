@@ -1,0 +1,10 @@
+--- a/samples/utils/utils.cpp
++++ b/samples/utils/utils.cpp
+@@ -24,6 +24,7 @@
+ #include <sys/time.h>
+ #include <unistd.h>
+ #include <string.h>
++#include <cstdint>
+ 
+ #include "RgaUtils.h"
+ 

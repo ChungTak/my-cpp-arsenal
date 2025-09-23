@@ -1,0 +1,16 @@
+--- a/include/drmrga.h
++++ b/include/drmrga.h
+@@ -21,7 +21,13 @@
+ #include <stdint.h>
+ #include <errno.h>
+-#include <sys/cdefs.h>
++
++/* musl libc compatibility fix */
++#ifdef __MUSL__
++#include "musl-compatibility.h"
++#else
++#include <sys/cdefs.h>
++#endif
+ 
+ #include "rga.h"
+ 

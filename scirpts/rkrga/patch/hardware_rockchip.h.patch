@@ -1,0 +1,16 @@
+--- a/core/3rdparty/android_hal/hardware/hardware_rockchip.h
++++ b/core/3rdparty/android_hal/hardware/hardware_rockchip.h
+@@ -2,6 +2,13 @@
+ 
+ #include "stdio.h"
+ 
++/* musl libc compatibility fix */
++#ifdef __MUSL__
++#include "musl-compatibility.h"
++#else
++#include <sys/cdefs.h>
++#endif
++
+ __BEGIN_DECLS
+ 
+ #define HWC_BLENDING_DIM            0x0805
