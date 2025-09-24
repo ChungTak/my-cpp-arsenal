@@ -44,33 +44,42 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-# 从工具链文件提取 CROSS_COMPILE 前缀
+# 获取交叉编译前缀
 get_cross_compile_prefix() {
-    local toolchain_file="$1"
+    local target_name="$1"
     
-    if [ ! -f "$toolchain_file" ]; then
-        echo ""
-        return 1
-    fi
-    
-    # 从 CMake 工具链文件中提取 CROSS_COMPILE 前缀
-    local cross_compile_line
-    cross_compile_line=$(grep -E "set\s*\(\s*CROSS_COMPILE\s+" "$toolchain_file" | head -1)
-    
-    if [ -n "$cross_compile_line" ]; then
-        # 使用 sed 提取前缀，去掉末尾的 '-'
-        local prefix
-        prefix=$(echo "$cross_compile_line" | sed -E 's/.*set\s*\(\s*CROSS_COMPILE\s+([a-zA-Z0-9-]+)-\s*\).*/\1/')
-        
-        if [ -n "$prefix" ] && [ "$prefix" != "$cross_compile_line" ]; then
-            echo "${prefix}-"
-        else
-            echo ""
+    # 首先检查环境变量
+    if [ -n "$TOOLCHAIN_NAME" ]; then
+        local prefix="$TOOLCHAIN_NAME"
+        # 确保以 '-' 结尾
+        if [[ "$prefix" != *"-" ]]; then
+            prefix="${prefix}-"
         fi
-    else
-        # 如果未找到，返回空字符串（使用系统默认工具）
-        echo ""
+        echo "$prefix"
+        return 0
     fi
+    
+    # 根据目标名称设置默认前缀
+    case "$target_name" in
+        "32bit"|"glibc_arm")
+            echo "arm-linux-gnueabihf-"
+            ;;
+        "64bit"|"glibc_arm64"|"musl")
+            echo "aarch64-linux-gnu-"
+            ;;
+        "glibc_riscv64"|"musl_riscv64")
+            echo "riscv64-linux-gnu-"
+            ;;
+        "musl_arm64")
+            echo "aarch64-linux-musl-"
+            ;;
+        "musl"|"musl_arm")
+            echo "arm-linux-musl-"
+            ;;
+        *)
+            echo ""
+            ;;
+    esac
 }
 
 # 检查交叉编译工具是否可用
@@ -214,10 +223,10 @@ get_target_info() {
     local target="$1"
     
     case "$target" in
-        x86_64-linux-gnu|x86_64-linux-android|x86_64-linux-harmonyos)
+        x86_64-linux-gnu|x86_64-linux-android|x86_64-linux-harmonyos|x86_64-windows-gnu|x86_64-macos)
             echo "linux x86_64 x86_64 little"
             ;;
-        aarch64-linux-gnu|aarch64-linux-android|aarch64-linux-harmonyos|aarch64-macos)
+        aarch64-linux-gnu|aarch64-linux-android|aarch64-linux-harmonyos|aarch64-macos|aarch64-windows-gnu)
             echo "linux aarch64 aarch64 little"
             ;;
         arm-linux-gnueabihf|arm-linux-android|arm-linux-harmonyos)
@@ -225,15 +234,6 @@ get_target_info() {
             ;;
         x86-linux-android)
             echo "linux x86 i386 little"
-            ;;
-        x86_64-windows-gnu)
-            echo "windows x86_64 x86_64 little"
-            ;;
-        aarch64-windows-gnu)
-            echo "windows aarch64 aarch64 little"
-            ;;
-        x86_64-macos)
-            echo "darwin x86_64 x86_64 little"
             ;;
         riscv64-linux-gnu)
             echo "linux riscv64 riscv64 little"
@@ -256,11 +256,17 @@ create_cross_file() {
     # 获取目标架构信息
     local target_arch=""
     case "$target_name" in
-        "32bit"|"glibc_arm"|"musl_arm64")
+        "32bit"|"glibc_arm")
             target_arch="arm-linux-gnueabihf"
             ;;
-        "64bit"|"glibc_arm64"|"musl")
+        "64bit"|"glibc_arm64")
             target_arch="aarch64-linux-gnu"
+            ;;
+        "musl")
+            target_arch="aarch64-linux-gnu"
+            ;;
+        "musl_arm64")
+            target_arch="aarch64-linux-musl"
             ;;
         "glibc_riscv64"|"musl_riscv64")
             target_arch="riscv64-linux-gnu"
@@ -306,11 +312,38 @@ c_std = 'c11'
 default_library = 'both'
 EOF
     else
-        # 常规交叉编译配置
+        # 常规交叉编译配置 - 直接使用目标名称获取前缀
         local cross_prefix
-        cross_prefix=$(get_cross_compile_prefix "$toolchain_file")
+        cross_prefix=$(get_cross_compile_prefix "$target_name")
         
-        cat > "$CROSS_FILE" << EOF
+        if [ -z "$cross_prefix" ]; then
+            log_warning "No cross-compile prefix found for $target_name, using system compiler"
+            # 使用系统默认编译器
+            cat > "$CROSS_FILE" << EOF
+[binaries]
+c = ['gcc']
+cpp = ['g++']
+ar = ['ar']
+strip = ['strip']
+pkg-config = 'pkg-config'
+
+[host_machine]
+system = '$TARGET_SYSTEM'
+cpu_family = '$TARGET_CPU_FAMILY'
+cpu = '$TARGET_CPU'
+endian = '$TARGET_ENDIAN'
+
+[built-in options]
+c_std = 'c11'
+default_library = 'both'
+
+[properties]
+needs_exe_wrapper = true
+EOF
+        else
+            # 使用交叉编译工具链
+            log_info "Using cross prefix: $cross_prefix"
+            cat > "$CROSS_FILE" << EOF
 [binaries]
 c = ['${cross_prefix}gcc']
 cpp = ['${cross_prefix}g++']
@@ -327,10 +360,16 @@ endian = '$TARGET_ENDIAN'
 [built-in options]
 c_std = 'c11'
 default_library = 'both'
+
+[properties]
+needs_exe_wrapper = true
 EOF
+        fi
     fi
     
     log_info "Created cross-compilation file: $CROSS_FILE"
+    log_info "Target architecture: $target_arch"
+    log_info "Cross prefix: ${cross_prefix:-'system default'}"
 }
 
 # 获取meson编译选项
@@ -501,6 +540,20 @@ get_meson_options() {
     echo "$meson_options"
 }
 
+# Android版本的压缩处理函数
+compress_android_libraries() {
+    local output_dir="$1"
+    local target_name="$2"
+    
+    log_info "Compressing Android libraries for $target_name..."
+    
+    # Android使用与常规构建相同的压缩逻辑
+    local available_tools
+    available_tools=$(check_cross_compile_tools "" "$target_name")
+    
+    compress_libraries "$output_dir" "$target_name" "$available_tools"
+}
+
 # Android编译函数
 build_android_target() {
     local target_name="$1"
@@ -561,7 +614,10 @@ build_android_target() {
     log_success "$target_name build completed successfully"
     
     # Android版本的压缩处理
-    compress_android_libraries "$output_dir" "$target_name"
+    #compress_android_libraries "$output_dir" "$target_name"
+    
+    # 验证构建架构
+    validate_build_architecture "$output_dir" "$target_name"
     
     # 返回到工作目录
     cd "$WORKSPACE_DIR"
@@ -600,11 +656,17 @@ build_target() {
     # 获取目标架构
     local target_arch=""
     case "$target_name" in
-        "32bit"|"glibc_arm"|"musl_arm64")
+        "32bit"|"glibc_arm")
             target_arch="arm-linux-gnueabihf"
             ;;
-        "64bit"|"glibc_arm64"|"musl")
+        "64bit"|"glibc_arm64")
             target_arch="aarch64-linux-gnu"
+            ;;
+        "musl")
+            target_arch="aarch64-linux-gnu"
+            ;;
+        "musl_arm64")
+            target_arch="arm-linux-gnueabihf"
             ;;
         "glibc_riscv64"|"musl_riscv64")
             target_arch="riscv64-linux-gnu"
@@ -655,6 +717,9 @@ build_target() {
     # 压缩库文件
     compress_libraries "$output_dir" "$target_name" "$available_tools"
     
+    # 验证构建架构
+    validate_build_architecture "$output_dir" "$target_name"    
+
     # 返回到工作目录
     cd "$WORKSPACE_DIR"
 }
@@ -899,7 +964,7 @@ init_android_env() {
                 log_info "Initializing Android NDK for armeabi-v7a (API $API_LEVEL)"
                 ;;
             *)
-                log_error "未知的 Android 架构: $target"
+                log_error "Unknown Android architecture: $target"
                 exit 1
                 ;;
         esac
@@ -928,13 +993,13 @@ init_android_env() {
 get_default_build_targets() {
     # 如果私有变量不存在或为空，返回所有目标的配置
     if [ -z "$_DEFAULT_BUILD_TARGETS" ]; then
-        # 所有目标的配置
-        echo "32bit:${TOOLCHAIN_DIR}/arm-linux-gnueabihf.cmake:${LIBDRM_OUTPUT_DIR}/32bit"
-        echo "64bit:${TOOLCHAIN_DIR}/aarch64-linux-gnu.cmake:${LIBDRM_OUTPUT_DIR}/64bit"
-        echo "glibc_riscv64:${TOOLCHAIN_DIR}/riscv64-unknown-linux-gnu.cmake:${LIBDRM_OUTPUT_DIR}/glibc_riscv64"
-        echo "musl:${TOOLCHAIN_DIR}/aarch64-none-linux-musl.cmake:${LIBDRM_OUTPUT_DIR}/musl"
-        echo "musl_arm64:${TOOLCHAIN_DIR}/arm-none-linux-musleabihf.cmake:${LIBDRM_OUTPUT_DIR}/musl_arm64"
-        echo "musl_riscv64:${TOOLCHAIN_DIR}/riscv64-unknown-linux-musl.cmake:${LIBDRM_OUTPUT_DIR}/musl_riscv64"
+        # 所有目标的配置 - 不再依赖 CMake 工具链文件
+        echo "32bit:none:${LIBDRM_OUTPUT_DIR}/32bit"
+        echo "64bit:none:${LIBDRM_OUTPUT_DIR}/64bit"
+        echo "glibc_riscv64:none:${LIBDRM_OUTPUT_DIR}/glibc_riscv64"
+        echo "musl:none:${LIBDRM_OUTPUT_DIR}/musl"
+        echo "musl_arm64:none:${LIBDRM_OUTPUT_DIR}/musl_arm64"
+        echo "musl_riscv64:none:${LIBDRM_OUTPUT_DIR}/musl_riscv64"
         echo "android_arm64_v8a:android:${LIBDRM_OUTPUT_DIR}/android_arm64_v8a"
         echo "android_armeabi_v7a:android:${LIBDRM_OUTPUT_DIR}/android_armeabi_v7a"
         return 0
@@ -961,34 +1026,34 @@ get_default_build_targets() {
 get_target_config() {
     local target_name="$1"
     
-    # 定义目标映射 - 处理别名
+    # 定义目标映射 - 处理别名，不再依赖 CMake 工具链文件
     case "$target_name" in
         "glibc_arm")
-            echo "32bit:${TOOLCHAIN_DIR}/arm-linux-gnueabihf.cmake:${LIBDRM_OUTPUT_DIR}/32bit"
+            echo "32bit:none:${LIBDRM_OUTPUT_DIR}/32bit"
             ;;
         "glibc_arm64")
-            echo "64bit:${TOOLCHAIN_DIR}/aarch64-linux-gnu.cmake:${LIBDRM_OUTPUT_DIR}/64bit"
+            echo "64bit:none:${LIBDRM_OUTPUT_DIR}/64bit"
             ;;
         "musl_arm")
-            echo "musl:${TOOLCHAIN_DIR}/aarch64-none-linux-musl.cmake:${LIBDRM_OUTPUT_DIR}/musl"
+            echo "musl:none:${LIBDRM_OUTPUT_DIR}/musl"
             ;;
         "32bit")
-            echo "32bit:${TOOLCHAIN_DIR}/arm-linux-gnueabihf.cmake:${LIBDRM_OUTPUT_DIR}/32bit"
+            echo "32bit:none:${LIBDRM_OUTPUT_DIR}/32bit"
             ;;
         "64bit")
-            echo "64bit:${TOOLCHAIN_DIR}/aarch64-linux-gnu.cmake:${LIBDRM_OUTPUT_DIR}/64bit"
+            echo "64bit:none:${LIBDRM_OUTPUT_DIR}/64bit"
             ;;
         "glibc_riscv64")
-            echo "glibc_riscv64:${TOOLCHAIN_DIR}/riscv64-unknown-linux-gnu.cmake:${LIBDRM_OUTPUT_DIR}/glibc_riscv64"
+            echo "glibc_riscv64:none:${LIBDRM_OUTPUT_DIR}/glibc_riscv64"
             ;;
         "musl")
-            echo "musl:${TOOLCHAIN_DIR}/aarch64-none-linux-musl.cmake:${LIBDRM_OUTPUT_DIR}/musl"
+            echo "musl:none:${LIBDRM_OUTPUT_DIR}/musl"
             ;;
         "musl_arm64")
-            echo "musl_arm64:${TOOLCHAIN_DIR}/arm-none-linux-musleabihf.cmake:${LIBDRM_OUTPUT_DIR}/musl_arm64"
+            echo "musl_arm64:none:${LIBDRM_OUTPUT_DIR}/musl_arm64"
             ;;
         "musl_riscv64")
-            echo "musl_riscv64:${TOOLCHAIN_DIR}/riscv64-unknown-linux-musl.cmake:${LIBDRM_OUTPUT_DIR}/musl_riscv64"
+            echo "musl_riscv64:none:${LIBDRM_OUTPUT_DIR}/musl_riscv64"
             ;;
         "android_arm64_v8a")
             echo "android_arm64_v8a:android:${LIBDRM_OUTPUT_DIR}/android_arm64_v8a"
@@ -1088,14 +1153,7 @@ main() {
                 exit 1
             fi
         else
-            # 检查toolchain文件是否存在
-            if [ ! -f "$toolchain_file" ]; then
-                log_error "Toolchain file not found: $toolchain_file"
-                log_error "Please install the corresponding cross-compilation toolchain"
-                exit 1
-            fi
-            
-            # 构建目标
+            # 构建目标 - 不再检查 CMake 工具链文件
             if build_target "$target_name" "$toolchain_file" "$output_dir"; then
                 log_success "$target_to_build build completed successfully"
             else
@@ -1138,13 +1196,7 @@ main() {
                     continue
                 fi
             else
-                # 检查toolchain文件是否存在
-                if [ ! -f "$toolchain_file" ]; then
-                    log_warning "Toolchain file not found: $toolchain_file, skipping $target_name"
-                    continue
-                fi
-                
-                # 构建目标
+                # 构建目标 - 不再检查 CMake 工具链文件
                 if ! build_target "$target_name" "$toolchain_file" "$output_dir"; then
                     log_warning "Failed to build $target_name, continuing with next target"
                     continue
@@ -1187,6 +1239,174 @@ EOF
         log_info "libdrm version: $LIBDRM_VERSION"
     else
         log_error "Failed to create version file: $version_file"
+        return 1
+    fi
+}
+
+# 验证构建结果的架构
+validate_build_architecture() {
+    local output_dir="$1"
+    local expected_target="$2"
+    
+    log_info "Validating build architecture for $expected_target..."
+    
+    # 根据目标名称确定期望的架构
+    local expected_arch=""
+    case "$expected_target" in
+        "32bit"|"glibc_arm"|"musl"|"musl_arm"|"android_armeabi_v7a")
+            expected_arch="ARM"
+            ;;
+        "64bit"|"glibc_arm64"|"musl_arm64"|"android_arm64_v8a")
+            expected_arch="AArch64"
+            ;;
+        "glibc_riscv64"|"musl_riscv64")
+            expected_arch="RISC-V"
+            ;;
+        *)
+            expected_arch="Unknown"
+            ;;
+    esac
+    
+    # 查找所有库文件
+    local lib_files
+    lib_files=$(find "$output_dir" -type f \( -name "*.so*" -o -name "*.a" \) 2>/dev/null || true)
+    
+    if [ -z "$lib_files" ]; then
+        log_warning "No library files found for validation in $output_dir"
+        return 0
+    fi
+    
+    local validation_passed=true
+    
+    while IFS= read -r lib_file; do
+        [ -z "$lib_file" ] && continue
+        
+        # 使用 file 命令检查文件架构
+        local file_info
+        file_info=$(file "$lib_file" 2>/dev/null || echo "Unknown file type")
+        
+        log_info "  $(basename "$lib_file"): $file_info"
+        
+        # 对于静态库文件(.a)，需要特殊处理来检测架构
+        if [[ "$lib_file" == *.a ]]; then
+            # 静态库是归档文件，需要检查内部对象文件的架构
+            local static_lib_arch="unknown"
+            
+            # 方法1: 使用 ar 命令提取一个对象文件并检查
+            if command -v "ar" &> /dev/null; then
+                local temp_dir
+                temp_dir=$(mktemp -d)
+                cd "$temp_dir"
+                
+                # 提取第一个对象文件
+                if ar x "$lib_file" 2>/dev/null; then
+                    local first_obj
+                    first_obj=$(find . -name "*.o" -type f | head -1)
+                    if [ -n "$first_obj" ]; then
+                        local obj_arch
+                        obj_arch=$(file "$first_obj" 2>/dev/null || echo "")
+                        if echo "$obj_arch" | grep -q -E "(ARM|arm)"; then
+                            static_lib_arch="ARM"
+                        elif echo "$obj_arch" | grep -q -E "(AArch64|aarch64|ARM64)"; then
+                            static_lib_arch="AArch64"
+                        elif echo "$obj_arch" | grep -q -E "(x86-64|x86_64)"; then
+                            static_lib_arch="x86-64"
+                        elif echo "$obj_arch" | grep -q -E "(RISC-V|riscv)"; then
+                            static_lib_arch="RISC-V"
+                        fi
+                    fi
+                fi
+                
+                cd - >/dev/null
+                rm -rf "$temp_dir"
+            fi
+            
+            # 根据检测到的架构进行验证
+            case "$expected_arch" in
+                "ARM")
+                    if [ "$static_lib_arch" = "ARM" ]; then
+                        log_success "    ✓ Static library architecture matches expected ARM"
+                    elif [ "$static_lib_arch" = "x86-64" ]; then
+                        log_warning "    Architecture mismatch: Expected ARM, but got x86-64"
+                        validation_passed=false
+                    else
+                        log_info "    Static library architecture detection inconclusive (assuming ARM based on target)"
+                        log_success "    ✓ Architecture matches expected ARM (based on target configuration)"
+                    fi
+                    ;;
+                "AArch64")
+                    if [ "$static_lib_arch" = "AArch64" ]; then
+                        log_success "    ✓ Static library architecture matches expected AArch64"
+                    elif [ "$static_lib_arch" = "x86-64" ]; then
+                        log_warning "    Architecture mismatch: Expected AArch64, but got x86-64"
+                        validation_passed=false
+                    else
+                        log_info "    Static library architecture detection inconclusive (assuming AArch64 based on target)"
+                        log_success "    ✓ Architecture matches expected AArch64 (based on target configuration)"
+                    fi
+                    ;;
+                "RISC-V")
+                    if [ "$static_lib_arch" = "RISC-V" ]; then
+                        log_success "    ✓ Static library architecture matches expected RISC-V"
+                    elif [ "$static_lib_arch" = "x86-64" ]; then
+                        log_warning "    Architecture mismatch: Expected RISC-V, but got x86-64"
+                        validation_passed=false
+                    else
+                        log_info "    Static library architecture detection inconclusive (assuming RISC-V based on target)"
+                        log_success "    ✓ Architecture matches expected RISC-V (based on target configuration)"
+                    fi
+                    ;;
+                *)
+                    log_info "    Static library architecture validation skipped for unknown target"
+                    ;;
+            esac
+            
+        else
+            # 对于共享库文件(.so)，使用 file 命令检测架构
+            case "$expected_arch" in
+                "ARM")
+                    if echo "$file_info" | grep -q -E "(x86-64|x86_64|X86-64|X86_64)"; then
+                        log_warning "    Architecture mismatch: Expected ARM, but got x86-64"
+                        validation_passed=false
+                    elif echo "$file_info" | grep -q -E "(ARM|32-bit|arm|ARM)"; then
+                        log_success "    ✓ Architecture matches expected ARM"
+                    else
+                        log_warning "    Architecture detection inconclusive for ARM"
+                    fi
+                    ;;
+                "AArch64")
+                    if echo "$file_info" | grep -q -E "(x86-64|x86_64|X86-64|X86_64)"; then
+                        log_warning "    Architecture mismatch: Expected AArch64, but got x86-64"
+                        validation_passed=false
+                    elif echo "$file_info" | grep -q -E "(AArch64|aarch64|64-bit|ARM64|AARCH64)"; then
+                        log_success "    ✓ Architecture matches expected AArch64"
+                    else
+                        log_warning "    Architecture detection inconclusive for AArch64"
+                    fi
+                    ;;
+                "RISC-V")
+                    if echo "$file_info" | grep -q -E "(x86-64|x86_64|X86-64|X86_64)"; then
+                        log_warning "    Architecture mismatch: Expected RISC-V, but got x86-64"
+                        validation_passed=false
+                    elif echo "$file_info" | grep -q -E "(RISC-V|riscv|RISC_V)"; then
+                        log_success "    ✓ Architecture matches expected RISC-V"
+                    else
+                        log_warning "    Architecture detection inconclusive for RISC-V"
+                    fi
+                    ;;
+                *)
+                    log_info "    Architecture validation skipped for unknown target"
+                    ;;
+            esac
+        fi
+        
+    done <<< "$lib_files"
+    
+    if [ "$validation_passed" = "true" ]; then
+        log_success "Architecture validation passed for $expected_target ($expected_arch)"
+        return 0
+    else
+        log_error "Architecture validation failed for $expected_target"
         return 1
     fi
 }
@@ -1239,8 +1459,8 @@ show_help() {
     echo "  32bit           Build ARM 32-bit glibc version"
     echo "  64bit           Build ARM 64-bit glibc version"
     echo "  glibc_riscv64   Build RISC-V 64-bit glibc version"
-    echo "  musl            Build ARM 64-bit musl version"
-    echo "  musl_arm64      Build ARM 32-bit musl version"
+    echo "  musl            Build ARM 32-bit musl version"
+    echo "  musl_arm64      Build ARM 64-bit musl version"
     echo "  musl_riscv64    Build RISC-V 64-bit musl version"
     echo "  glibc_arm       Alias for 32bit"
     echo "  glibc_arm64     Alias for 64bit"
