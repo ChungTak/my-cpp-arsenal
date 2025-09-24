@@ -17,7 +17,7 @@ RKMPP_OUTPUT_DIR="${OUTPUTS_DIR}/rkmpp"
 MPP_SOURCE_DIR="${SOURCES_DIR}/rkmpp"
 
 # 限制默认编译目标
-# _DEFAULT_BUILD_TARGETS="glibc_arm64,glibc_arm,android_arm64_v8a,android_armeabi_v7a"
+_DEFAULT_BUILD_TARGETS="glibc_arm64,glibc_arm,android_arm64_v8a,android_armeabi_v7a"
 
 # 颜色输出
 RED='\033[0;31m'
