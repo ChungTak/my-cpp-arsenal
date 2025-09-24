@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# RK RGA 构建脚本
-# 支持多种交叉编译工具链编译librga库
+# RK MPP 构建脚本
+# 支持多种交叉编译工具链编译 Rockchip Media Process Platform (MPP) 库
 
 set -e
 
@@ -11,13 +11,13 @@ WORKSPACE_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 TOOLCHAIN_DIR="${WORKSPACE_DIR}/toolchain"
 SOURCES_DIR="${WORKSPACE_DIR}/sources"
 OUTPUTS_DIR="${WORKSPACE_DIR}/outputs"
-RKRGA_OUTPUT_DIR="${OUTPUTS_DIR}/rkrga"
+RKMPP_OUTPUT_DIR="${OUTPUTS_DIR}/rkmpp"
 
-# librga 源码目录
-LIBRGA_SOURCE_DIR="${SOURCES_DIR}/rkrga"
+# mpp 源码目录
+MPP_SOURCE_DIR="${SOURCES_DIR}/rkmpp"
 
 # 限制默认编译目标
-_DEFAULT_BUILD_TARGETS="glibc_arm64,glibc_arm,android_arm64_v8a,android_armeabi_v7a"
+# _DEFAULT_BUILD_TARGETS="glibc_arm64,glibc_arm,android_arm64_v8a,android_armeabi_v7a"
 
 # 颜色输出
 RED='\033[0;31m'
@@ -40,35 +40,6 @@ log_warning() {
 
 log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
-}
-
-# 从工具链文件提取 CROSS_COMPILE 前缀
-get_cross_compile_prefix() {
-    local toolchain_file="$1"
-    
-    if [ ! -f "$toolchain_file" ]; then
-        echo ""
-        return 1
-    fi
-    
-    # 从 CMake 工具链文件中提取 CROSS_COMPILE 前缀
-    local cross_compile_line
-    cross_compile_line=$(grep -E "set\s*\(\s*CROSS_COMPILE\s+" "$toolchain_file" | head -1)
-    
-    if [ -n "$cross_compile_line" ]; then
-        # 使用 sed 提取前缀，去掉末尾的 '-'
-        local prefix
-        prefix=$(echo "$cross_compile_line" | sed -E 's/.*set\s*\(\s*CROSS_COMPILE\s+([a-zA-Z0-9-]+)-\s*\).*/\1/')
-        
-        if [ -n "$prefix" ] && [ "$prefix" != "$cross_compile_line" ]; then
-            echo "${prefix}-"
-        else
-            echo ""
-        fi
-    else
-        # 如果未找到，返回空字符串（使用系统默认工具）
-        echo ""
-    fi
 }
 
 # 检查交叉编译工具是否可用
@@ -120,6 +91,7 @@ check_cross_compile_tools() {
     
     echo "$tools_status"
 }
+
 # 检查必要的工具
 check_tools() {
     local tools=("git" "cmake" "make")
@@ -131,65 +103,64 @@ check_tools() {
     done
 }
 
-# 克隆librga源码
-clone_librga() {
-    log_info "Checking librga repository..."
+# 克隆 mpp 源码
+clone_mpp() {
+    log_info "Checking mpp repository..."
     
     # 创建sources目录
     mkdir -p "${SOURCES_DIR}"
     
     # 如果目录已存在且包含CMakeLists.txt，跳过克隆
-    if [ -d "${LIBRGA_SOURCE_DIR}" ] && [ -f "${LIBRGA_SOURCE_DIR}/CMakeLists.txt" ]; then
-        log_success "librga source already exists, skipping clone"
+    if [ -d "${MPP_SOURCE_DIR}" ] && [ -f "${MPP_SOURCE_DIR}/CMakeLists.txt" ]; then
+        log_success "mpp source already exists, skipping clone"
         return 0
     fi
     
     # 如果目录存在但不完整，先删除
-    if [ -d "${LIBRGA_SOURCE_DIR}" ]; then
-        log_warning "Removing incomplete librga directory"
-        rm -rf "${LIBRGA_SOURCE_DIR}"
+    if [ -d "${MPP_SOURCE_DIR}" ]; then
+        log_warning "Removing incomplete mpp directory"
+        rm -rf "${MPP_SOURCE_DIR}"
     fi
     
     # 克隆最新代码
-    log_info "Cloning librga repository..."
-    git clone -b jellyfin-rga --depth=1 https://github.com/nyanmisaka/rk-mirrors.git "${LIBRGA_SOURCE_DIR}"
+    log_info "Cloning mpp repository..."
+    git clone --depth=1 https://github.com/rockchip-linux/mpp "${MPP_SOURCE_DIR}"
     
     if [ $? -eq 0 ]; then
-        log_success "librga cloned successfully"
+        log_success "mpp cloned successfully"
     else
-        log_error "Failed to clone librga"
+        log_error "Failed to clone mpp"
         exit 1
     fi
 }
 
-# 应用musl兼容性补丁
-apply_musl_patches() {
-    local target_name="$1"
+# 从工具链文件提取 CROSS_COMPILE 前缀
+get_cross_compile_prefix() {
+    local toolchain_file="$1"
     
-    # 检查是否为musl目标
-    case "$target_name" in
-        "musl"|"musl_arm"|"musl_arm64"|"musl_riscv64")
-            log_info "Applying musl compatibility patches for $target_name..."
-            
-            # 检查补丁脚本是否存在
-            local patch_script="${SCRIPT_DIR}/apply-musl-patches.sh"
-            if [ -f "$patch_script" ]; then
-                # 运行补丁脚本
-                if "$patch_script" apply; then
-                    log_success "musl patches applied successfully"
-                else
-                    log_error "Failed to apply musl patches"
-                    exit 1
-                fi
-            else
-                log_warning "musl patch script not found: $patch_script"
-                log_warning "musl compilation may fail due to compatibility issues"
-            fi
-            ;;
-        *)
-            log_info "Non-musl target ($target_name), skipping patch application"
-            ;;
-    esac
+    if [ ! -f "$toolchain_file" ]; then
+        echo ""
+        return 1
+    fi
+    
+    # 从 CMake 工具链文件中提取 CROSS_COMPILE 前缀
+    local cross_compile_line
+    cross_compile_line=$(grep -E "set\s*\(\s*CROSS_COMPILE\s+" "$toolchain_file" | head -1)
+    
+    if [ -n "$cross_compile_line" ]; then
+        # 使用 sed 提取前缀，去掉末尾的 '-'
+        local prefix
+        prefix=$(echo "$cross_compile_line" | sed -E 's/.*set\s*\(\s*CROSS_COMPILE\s+([a-zA-Z0-9-]+)-\s*\).*/\1/')
+        
+        if [ -n "$prefix" ] && [ "$prefix" != "$cross_compile_line" ]; then
+            echo "${prefix}-"
+        else
+            echo ""
+        fi
+    else
+        # 如果未找到，返回空字符串（使用系统默认工具）
+        echo ""
+    fi
 }
 
 # Android编译函数
@@ -206,7 +177,7 @@ build_android_target() {
     mkdir -p "$output_dir"
     
     # 创建构建目录
-    local build_dir="${LIBRGA_SOURCE_DIR}/build/build_${target_name}"
+    local build_dir="${MPP_SOURCE_DIR}/build/build_${target_name}"
     rm -rf "$build_dir"  # 清理旧的构建目录
     mkdir -p "$build_dir"
     
@@ -222,16 +193,15 @@ build_android_target() {
     
     log_info "Using Android NDK CMake toolchain: $android_toolchain"
     
-    # 配置CMake - 使用Android NDK的CMake工具链，参考cmake-android.sh
+    # 配置CMake - 使用Android NDK的CMake工具链
     cmake ../.. \
           -DCMAKE_TOOLCHAIN_FILE="$android_toolchain" \
-          -DCMAKE_BUILD_TARGET=android_ndk \
           -DANDROID_ABI="$ANDROID_ABI" \
           -DANDROID_PLATFORM="android-$API_LEVEL" \
           -DCMAKE_BUILD_TYPE=Release \
           -DCMAKE_INSTALL_PREFIX="$output_dir" \
-          -DRGA_SOURCE_CODE_TYPE=cpp \
-          -DRGA_SAMPLES_ENABLE=false
+          -DBUILD_SHARED_LIBS=ON \
+          -DBUILD_TEST=OFF
     
     if [ $? -ne 0 ]; then
         log_error "CMake configuration failed for $target_name"
@@ -391,7 +361,7 @@ build_target() {
     mkdir -p "$output_dir"
     
     # 创建构建目录
-    local build_dir="${LIBRGA_SOURCE_DIR}/build_${target_name}"
+    local build_dir="${MPP_SOURCE_DIR}/build_${target_name}"
     mkdir -p "$build_dir"
     
     # 进入构建目录
@@ -401,8 +371,8 @@ build_target() {
     cmake -DCMAKE_TOOLCHAIN_FILE="$toolchain_file" \
           -DCMAKE_BUILD_TYPE=Release \
           -DCMAKE_INSTALL_PREFIX="$output_dir" \
-          -DCMAKE_BUILD_TARGET=cmake_linux \
-          -DRGA_SAMPLES_ENABLE=false \
+          -DBUILD_SHARED_LIBS=ON \
+          -DBUILD_TEST=OFF \
           ..
     
     if [ $? -ne 0 ]; then
@@ -447,16 +417,12 @@ compress_libraries() {
     local strip_cmd=""
     local objcopy_cmd=""
     local upx_cmd=""
-    local xz_cmd=""
-    local gzip_cmd=""
     
     if [ -n "$available_tools" ]; then
         # 从工具列表中提取各类工具
         strip_cmd=$(echo "$available_tools" | grep -o "strip:[^ ]*" | cut -d: -f2)
         objcopy_cmd=$(echo "$available_tools" | grep -o "objcopy:[^ ]*" | cut -d: -f2)
         upx_cmd=$(echo "$available_tools" | grep -o "upx:[^ ]*" | cut -d: -f2)
-        xz_cmd=$(echo "$available_tools" | grep -o "xz:[^ ]*" | cut -d: -f2)
-        gzip_cmd=$(echo "$available_tools" | grep -o "gzip:[^ ]*" | cut -d: -f2)
     fi
     
     # 显示可用的工具
@@ -464,8 +430,6 @@ compress_libraries() {
     [ -n "$strip_cmd" ] && log_info "  Strip: $strip_cmd"
     [ -n "$objcopy_cmd" ] && log_info "  Objcopy: $objcopy_cmd"
     [ -n "$upx_cmd" ] && log_info "  UPX: $upx_cmd"
-    [ -n "$xz_cmd" ] && log_info "  XZ: $xz_cmd"
-    [ -n "$gzip_cmd" ] && log_info "  GZIP: $gzip_cmd"
     
     # 查找所有 .so 和 .a 文件
     local lib_files
@@ -493,7 +457,7 @@ compress_libraries() {
         
         log_info "  Processing: $(basename "$lib_file") (${original_size} bytes)"
         
-        # 1. 首先尝试 strip 移除符号表（对所有库文件都有效）
+        # 1. 首先尝试 strip 移除符号表
         if [ -n "$strip_cmd" ]; then
             # 创建备份来测试 strip 效果
             local backup_file="${lib_file}.backup"
@@ -530,37 +494,7 @@ compress_libraries() {
             log_info "    Strip tool not available for this target"
         fi
         
-        # 2. 对于动态库，尝试 UPX 压缩
-        if [[ "$lib_file" == *.so* ]] && [ -n "$upx_cmd" ]; then
-            local compressed_file="${lib_file}.upx"
-            log_info "    Trying UPX compression with $upx_cmd..."
-            
-            # 尝试不同的 UPX 压缩级别
-            if "$upx_cmd" --best --lzma -o "$compressed_file" "$lib_file" &>/dev/null; then
-                local upx_size
-                upx_size=$(stat -c%s "$compressed_file" 2>/dev/null || echo "$final_size")
-                
-                if [ "$upx_size" -lt "$final_size" ]; then
-                    local upx_reduction
-                    upx_reduction=$(( (final_size - upx_size) * 100 / final_size ))
-                    mv "$compressed_file" "$lib_file"
-                    final_size=$upx_size
-                    compression_method="${compression_method}+upx"
-                    compression_applied=true
-                    log_success "      UPX: ${upx_reduction}% additional reduction"
-                else
-                    rm -f "$compressed_file"
-                    log_info "      UPX compression not beneficial"
-                fi
-            else
-                rm -f "$compressed_file"
-                log_info "      UPX compression failed"
-            fi
-        elif [[ "$lib_file" == *.so* ]]; then
-            log_info "    UPX not available for this target"
-        fi
-        
-        # 3. 尝试使用 objcopy 进一步优化（如果可用）
+        # 2. 尝试使用 objcopy 进一步优化（如果可用）
         if [ -n "$objcopy_cmd" ] && [ "$compression_applied" = "true" ]; then
             log_info "    Optimizing with $objcopy_cmd..."
             if "$objcopy_cmd" --remove-section=.comment --remove-section=.note "$lib_file" 2>/dev/null; then
@@ -585,8 +519,6 @@ compress_libraries() {
             log_info "    No compression applied"
         fi
         
-        echo ""
-        
     done <<< "$lib_files"
     
     # 显示压缩统计
@@ -600,53 +532,6 @@ compress_libraries() {
     else
         log_info "No significant compression achieved for $target_name (files may already be optimized)"
     fi
-    
-    # 显示每个文件的详细信息
-    log_info "Final library file sizes:"
-    while IFS= read -r lib_file; do
-        [ -z "$lib_file" ] && continue
-        local size
-        size=$(stat -c%s "$lib_file" 2>/dev/null || echo "0")
-        local size_kb
-        size_kb=$((size / 1024))
-        log_info "  $(basename "$lib_file"): ${size_kb} KB"
-    done <<< "$lib_files"
-}
-
-# 创建软链接
-create_symlinks() {
-    local target_built="$1"
-    
-    log_info "Creating symbolic links..."
-    
-    cd "$RKRGA_OUTPUT_DIR"
-    
-    # 根据构建的目标创建对应的软链接
-    case "$target_built" in
-        "32bit"|"glibc_arm")
-            if [ -d "32bit" ]; then
-                ln -sf 32bit glibc_arm
-            fi
-            ;;
-        "64bit"|"glibc_arm64")
-            if [ -d "64bit" ]; then
-                ln -sf 64bit glibc_arm64
-            fi
-            ;;
-        "musl"|"musl_arm")
-            if [ -d "musl" ]; then
-                ln -sf musl musl_arm
-            fi
-            ;;
-        "all")
-            # 为所有存在的目录创建软链接
-            [ -d "32bit" ] && ln -sf 32bit glibc_arm
-            [ -d "64bit" ] && ln -sf 64bit glibc_arm64
-            [ -d "musl" ] && ln -sf musl musl_arm
-            ;;
-    esac
-    
-    log_success "Symbolic links created"
 }
 
 # Android环境初始化
@@ -698,19 +583,64 @@ init_android_env() {
     fi
 }
 
+# 获取目标配置
+get_target_config() {
+    local target_name="$1"
+    
+    # 定义目标映射 - 处理别名
+    case "$target_name" in
+        "glibc_arm")
+            echo "32bit:${TOOLCHAIN_DIR}/arm-linux-gnueabihf.cmake:${RKMPP_OUTPUT_DIR}/32bit"
+            ;;
+        "glibc_arm64")
+            echo "64bit:${TOOLCHAIN_DIR}/aarch64-linux-gnu.cmake:${RKMPP_OUTPUT_DIR}/64bit"
+            ;;
+        "musl_arm")
+            echo "musl:${TOOLCHAIN_DIR}/aarch64-none-linux-musl.cmake:${RKMPP_OUTPUT_DIR}/musl"
+            ;;
+        "32bit")
+            echo "32bit:${TOOLCHAIN_DIR}/arm-linux-gnueabihf.cmake:${RKMPP_OUTPUT_DIR}/32bit"
+            ;;
+        "64bit")
+            echo "64bit:${TOOLCHAIN_DIR}/aarch64-linux-gnu.cmake:${RKMPP_OUTPUT_DIR}/64bit"
+            ;;
+        "glibc_riscv64")
+            echo "glibc_riscv64:${TOOLCHAIN_DIR}/riscv64-unknown-linux-gnu.cmake:${RKMPP_OUTPUT_DIR}/glibc_riscv64"
+            ;;
+        "musl")
+            echo "musl:${TOOLCHAIN_DIR}/aarch64-none-linux-musl.cmake:${RKMPP_OUTPUT_DIR}/musl"
+            ;;
+        "musl_arm64")
+            echo "musl_arm64:${TOOLCHAIN_DIR}/arm-none-linux-musleabihf.cmake:${RKMPP_OUTPUT_DIR}/musl_arm64"
+            ;;
+        "musl_riscv64")
+            echo "musl_riscv64:${TOOLCHAIN_DIR}/riscv64-unknown-linux-musl.cmake:${RKMPP_OUTPUT_DIR}/musl_riscv64"
+            ;;
+        "android_arm64_v8a")
+            echo "android_arm64_v8a:android:${RKMPP_OUTPUT_DIR}/android_arm64_v8a"
+            ;;
+        "android_armeabi_v7a")
+            echo "android_armeabi_v7a:android:${RKMPP_OUTPUT_DIR}/android_armeabi_v7a"
+            ;;
+        *)
+            echo ""
+            ;;
+    esac
+}
+
 # 获取默认编译目标列表
 get_default_build_targets() {
     # 如果私有变量不存在或为空，返回所有目标的配置
     if [ -z "$_DEFAULT_BUILD_TARGETS" ]; then
         # 所有目标的配置
-        echo "32bit:${TOOLCHAIN_DIR}/arm-linux-gnueabihf.cmake:${RKRGA_OUTPUT_DIR}/32bit"
-        echo "64bit:${TOOLCHAIN_DIR}/aarch64-linux-gnu.cmake:${RKRGA_OUTPUT_DIR}/64bit"
-        echo "glibc_riscv64:${TOOLCHAIN_DIR}/riscv64-unknown-linux-gnu.cmake:${RKRGA_OUTPUT_DIR}/glibc_riscv64"
-        echo "musl:${TOOLCHAIN_DIR}/aarch64-none-linux-musl.cmake:${RKRGA_OUTPUT_DIR}/musl"
-        echo "musl_arm64:${TOOLCHAIN_DIR}/arm-none-linux-musleabihf.cmake:${RKRGA_OUTPUT_DIR}/musl_arm64"
-        echo "musl_riscv64:${TOOLCHAIN_DIR}/riscv64-unknown-linux-musl.cmake:${RKRGA_OUTPUT_DIR}/musl_riscv64"
-        echo "android_arm64_v8a:android:${RKRGA_OUTPUT_DIR}/android_arm64_v8a"
-        echo "android_armeabi_v7a:android:${RKRGA_OUTPUT_DIR}/android_armeabi_v7a"
+        echo "32bit:${TOOLCHAIN_DIR}/arm-linux-gnueabihf.cmake:${RKMPP_OUTPUT_DIR}/32bit"
+        echo "64bit:${TOOLCHAIN_DIR}/aarch64-linux-gnu.cmake:${RKMPP_OUTPUT_DIR}/64bit"
+        echo "glibc_riscv64:${TOOLCHAIN_DIR}/riscv64-unknown-linux-gnu.cmake:${RKMPP_OUTPUT_DIR}/glibc_riscv64"
+        echo "musl:${TOOLCHAIN_DIR}/aarch64-none-linux-musl.cmake:${RKMPP_OUTPUT_DIR}/musl"
+        echo "musl_arm64:${TOOLCHAIN_DIR}/arm-none-linux-musleabihf.cmake:${RKMPP_OUTPUT_DIR}/musl_arm64"
+        echo "musl_riscv64:${TOOLCHAIN_DIR}/riscv64-unknown-linux-musl.cmake:${RKMPP_OUTPUT_DIR}/musl_riscv64"
+        echo "android_arm64_v8a:android:${RKMPP_OUTPUT_DIR}/android_arm64_v8a"
+        echo "android_armeabi_v7a:android:${RKMPP_OUTPUT_DIR}/android_armeabi_v7a"
         return 0
     fi
     
@@ -729,51 +659,6 @@ get_default_build_targets() {
             fi
         fi
     done
-}
-
-# 获取目标配置
-get_target_config() {
-    local target_name="$1"
-    
-    # 定义目标映射 - 处理别名
-    case "$target_name" in
-        "glibc_arm")
-            echo "32bit:${TOOLCHAIN_DIR}/arm-linux-gnueabihf.cmake:${RKRGA_OUTPUT_DIR}/32bit"
-            ;;
-        "glibc_arm64")
-            echo "64bit:${TOOLCHAIN_DIR}/aarch64-linux-gnu.cmake:${RKRGA_OUTPUT_DIR}/64bit"
-            ;;
-        "musl_arm")
-            echo "musl:${TOOLCHAIN_DIR}/aarch64-none-linux-musl.cmake:${RKRGA_OUTPUT_DIR}/musl"
-            ;;
-        "32bit")
-            echo "32bit:${TOOLCHAIN_DIR}/arm-linux-gnueabihf.cmake:${RKRGA_OUTPUT_DIR}/32bit"
-            ;;
-        "64bit")
-            echo "64bit:${TOOLCHAIN_DIR}/aarch64-linux-gnu.cmake:${RKRGA_OUTPUT_DIR}/64bit"
-            ;;
-        "glibc_riscv64")
-            echo "glibc_riscv64:${TOOLCHAIN_DIR}/riscv64-unknown-linux-gnu.cmake:${RKRGA_OUTPUT_DIR}/glibc_riscv64"
-            ;;
-        "musl")
-            echo "musl:${TOOLCHAIN_DIR}/aarch64-none-linux-musl.cmake:${RKRGA_OUTPUT_DIR}/musl"
-            ;;
-        "musl_arm64")
-            echo "musl_arm64:${TOOLCHAIN_DIR}/arm-none-linux-musleabihf.cmake:${RKRGA_OUTPUT_DIR}/musl_arm64"
-            ;;
-        "musl_riscv64")
-            echo "musl_riscv64:${TOOLCHAIN_DIR}/riscv64-unknown-linux-musl.cmake:${RKRGA_OUTPUT_DIR}/musl_riscv64"
-            ;;
-        "android_arm64_v8a")
-            echo "android_arm64_v8a:android:${RKRGA_OUTPUT_DIR}/android_arm64_v8a"
-            ;;
-        "android_armeabi_v7a")
-            echo "android_armeabi_v7a:android:${RKRGA_OUTPUT_DIR}/android_armeabi_v7a"
-            ;;
-        *)
-            echo ""
-            ;;
-    esac
 }
 
 # 验证目标名称
@@ -827,16 +712,16 @@ parse_arguments() {
 main() {
     local target_to_build="$1"
     
-    log_info "Starting RK RGA build process..."
+    log_info "Starting RK MPP build process..."
     
     # 检查工具
     check_tools
     
     # 克隆源码
-    clone_librga
+    clone_mpp
     
     # 创建输出目录
-    mkdir -p "$RKRGA_OUTPUT_DIR"
+    mkdir -p "$RKMPP_OUTPUT_DIR"
     
     if [ -n "$target_to_build" ]; then
         # 单个目标构建
@@ -869,9 +754,6 @@ main() {
                 exit 1
             fi
             
-            # 应用musl补丁（如果需要）
-            apply_musl_patches "$target_name"
-            
             # 构建目标
             if build_target "$target_name" "$toolchain_file" "$output_dir"; then
                 log_success "$target_to_build build completed successfully"
@@ -880,9 +762,6 @@ main() {
                 exit 1
             fi
         fi
-        
-        # 创建对应的软链接
-        create_symlinks "$target_to_build"
         
     else
         # 构建所有目标（或默认限制的目标）
@@ -921,9 +800,6 @@ main() {
                     continue
                 fi
                 
-                # 应用musl补丁（如果需要）
-                apply_musl_patches "$target_name"
-                
                 # 构建目标
                 if ! build_target "$target_name" "$toolchain_file" "$output_dir"; then
                     log_warning "Failed to build $target_name, continuing with next target"
@@ -931,31 +807,26 @@ main() {
                 fi
             fi
         done <<< "$targets_to_build"
-        
-        # 创建所有软链接
-        create_symlinks "all"
     fi
     
     log_success "Build process completed!"
-    log_info "Output directory: $RKRGA_OUTPUT_DIR"
-    
-    # 显示压缩统计
-    show_compression_summary
+    log_info "Output directory: $RKMPP_OUTPUT_DIR"
     
     # 生成version.ini文件
     create_version_file
-    
+
     # 显示目录结构
     log_info "Directory structure:"
-    tree "$RKRGA_OUTPUT_DIR" 2>/dev/null || ls -la "$RKRGA_OUTPUT_DIR"
+    tree "$RKMPP_OUTPUT_DIR" 2>/dev/null || ls -la "$RKMPP_OUTPUT_DIR"
 }
+
 
 # 创建版本信息文件
 create_version_file() {
     log_info "Creating version.ini file..."
     
-    local version_file="${RKRGA_OUTPUT_DIR}/version.ini"
-    local changelog_file="${LIBRGA_SOURCE_DIR}/CHANGELOG.md"
+    local version_file="${RKMPP_OUTPUT_DIR}/version.ini"
+    local changelog_file="${MPP_SOURCE_DIR}/CHANGELOG.md"
     
     # 检查CHANGELOG.md是否存在
     if [ ! -f "$changelog_file" ]; then
@@ -991,44 +862,39 @@ EOF
     fi
 }
 
-# 显示压缩统计汇总
-show_compression_summary() {
-    log_info "Checking final library sizes..."
-    
-    # 查找所有库文件并显示大小
-    local all_libs
-    all_libs=$(find "$RKRGA_OUTPUT_DIR" -type f \( -name "*.so*" -o -name "*.a" -o -name "*.gz" \) 2>/dev/null || true)
-    
-    if [ -n "$all_libs" ]; then
-        log_info "Final library files:"
-        while IFS= read -r lib_file; do
-            [ -z "$lib_file" ] && continue
-            local size
-            size=$(stat -c%s "$lib_file" 2>/dev/null || echo "0")
-            local size_mb
-            if command -v "bc" &> /dev/null; then
-                size_mb=$(echo "scale=2; $size / 1024 / 1024" | bc 2>/dev/null || echo "0.00")
-            else
-                size_mb=$(( size / 1024 / 1024 ))
-            fi
-            log_info "  $(basename "$lib_file"): ${size} bytes (${size_mb} MB)"
-        done <<< "$all_libs"
-    fi
-}
 
 # 清理函数
 cleanup() {
     log_info "Cleaning up..."
     
     # 清理构建目录
-    if [ -d "${LIBRGA_SOURCE_DIR}" ]; then
-        find "${LIBRGA_SOURCE_DIR}" -name "build_*" -type d -exec rm -rf {} + 2>/dev/null || true
+    if [ -d "${MPP_SOURCE_DIR}" ]; then
+        find "${MPP_SOURCE_DIR}" -name "build_*" -type d -exec rm -rf {} + 2>/dev/null || true
     fi
+}
+
+# 清理所有
+clean_all() {
+    log_info "Cleaning all..."
+    
+    # 清理源码目录
+    if [ -d "${SOURCES_DIR}" ]; then
+        log_info "Removing sources directory: ${SOURCES_DIR}"
+        rm -rf "${SOURCES_DIR}"
+    fi
+    
+    # 清理输出目录
+    if [ -d "${RKMPP_OUTPUT_DIR}" ]; then
+        log_info "Removing output directory: ${RKMPP_OUTPUT_DIR}"
+        rm -rf "${RKMPP_OUTPUT_DIR}"
+    fi
+    
+    log_success "Clean completed"
 }
 
 # 帮助信息
 show_help() {
-    echo "RK RGA Build Script"
+    echo "RK MPP Build Script"
     echo ""
     echo "Usage: $0 [OPTIONS] [TARGET]"
     echo ""
@@ -1064,32 +930,6 @@ show_help() {
     echo "  $0 --clean           # Clean build directories"
     echo "  $0 --clean-all       # Clean everything"
     echo ""
-    echo "Compression Features:"
-    echo "  - Automatic library compression using available tools"
-    echo "  - UPX compression for .so files (if available)"
-    echo "  - Symbol stripping for size reduction"
-    echo "  - Gzip compression for static libraries"
-    echo "  - Compression statistics and size reporting"
-    echo ""
-}
-
-# 清理所有
-clean_all() {
-    log_info "Cleaning all..."
-    
-    # 清理源码目录
-    if [ -d "${SOURCES_DIR}" ]; then
-        log_info "Removing sources directory: ${SOURCES_DIR}"
-        rm -rf "${SOURCES_DIR}"
-    fi
-    
-    # 清理输出目录
-    if [ -d "${RKRGA_OUTPUT_DIR}" ]; then
-        log_info "Removing output directory: ${RKRGA_OUTPUT_DIR}"
-        rm -rf "${RKRGA_OUTPUT_DIR}"
-    fi
-    
-    log_success "Clean completed"
 }
 
 # 信号处理
@@ -1115,3 +955,4 @@ case "${1:-}" in
         main "$TARGET_TO_BUILD"
         ;;
 esac
+

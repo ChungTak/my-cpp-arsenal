@@ -18,10 +18,7 @@ LIBDRM_VERSION="2.4.125"
 LIBDRM_SOURCE_DIR="${SOURCES_DIR}/libdrm"
 PROJECT_ROOT_DIR="${SCRIPT_DIR}"
 
-# 内部私有变量：限制默认编译目标
-# 当不输入参数时，只编译这些目标而不是所有目标
-# 如果此变量不存在或为空，则编译所有目标
-# 注意：此变量为内部私有变量，不对外部暴露
+# 限制默认编译目标
 _DEFAULT_BUILD_TARGETS="glibc_arm64,glibc_arm,android_arm64_v8a,android_armeabi_v7a"
 
 # 颜色输出

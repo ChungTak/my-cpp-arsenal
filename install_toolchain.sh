@@ -54,7 +54,7 @@ check_system() {
 check_network() {
     log_info "检查网络连接..."
     
-    if ! ping -c 1 8.8.8.8 &> /dev/null; then
+    if ! ping -c 1 www.bing.com &> /dev/null; then
         log_error "无法连接到 Ubuntu 软件源，请检查网络连接"
         exit 1
     fi
