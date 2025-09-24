@@ -614,7 +614,7 @@ build_android_target() {
     log_success "$target_name build completed successfully"
     
     # Android版本的压缩处理
-    #compress_android_libraries "$output_dir" "$target_name"
+    compress_android_libraries "$output_dir" "$target_name"
     
     # 验证构建架构
     validate_build_architecture "$output_dir" "$target_name"
