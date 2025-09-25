@@ -2,3 +2,5 @@ outputs
 sources
 temp
 __pycache__
+cache
+build

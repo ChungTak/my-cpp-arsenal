@@ -14,7 +14,7 @@ RKRGA_OUTPUT_DIR="${OUTPUTS_DIR}/rkrga"
 LIBRGA_SOURCE_DIR="${SOURCES_DIR}/rkrga"
 
 # 限制默认编译目标
-_DEFAULT_BUILD_TARGETS="glibc_arm64,glibc_arm,android_arm64_v8a,android_armeabi_v7a"
+_DEFAULT_BUILD_TARGETS="aarch64-linux-gnu,arm-linux-gnueabihf,aarch64-linux-android,arm-linux-android"
 
 # 颜色输出
 RED='\033[0;31m'
@@ -65,29 +65,41 @@ clone_librga() {
 get_target_config() {
     local target="$1"
     case "$target" in
-        "32bit"|"glibc_arm")
-            echo "32bit:${RKRGA_OUTPUT_DIR}/32bit"
+        "arm-linux-gnueabihf")
+            echo "arm-linux-gnueabihf:${RKRGA_OUTPUT_DIR}/arm-linux-gnueabihf"
             ;;
-        "64bit"|"glibc_arm64")
-            echo "64bit:${RKRGA_OUTPUT_DIR}/64bit"
+        "aarch64-linux-gnu")
+            echo "aarch64-linux-gnu:${RKRGA_OUTPUT_DIR}/aarch64-linux-gnu"
             ;;
-        "musl"|"musl_arm")
-            echo "musl:${RKRGA_OUTPUT_DIR}/musl"
+        "arm-linux-musleabihf")
+            echo "arm-linux-musleabihf:${RKRGA_OUTPUT_DIR}/arm-linux-musleabihf"
             ;;
-        "musl_arm64")
-            echo "musl_arm64:${RKRGA_OUTPUT_DIR}/musl_arm64"
+        "aarch64-linux-musl")
+            echo "aarch64-linux-musl:${RKRGA_OUTPUT_DIR}/aarch64-linux-musl"
             ;;
-        "glibc_riscv64")
-            echo "glibc_riscv64:${RKRGA_OUTPUT_DIR}/glibc_riscv64"
+        "riscv64-linux-gnu")
+            echo "riscv64-linux-gnu:${RKRGA_OUTPUT_DIR}/riscv64-linux-gnu"
             ;;
-        "musl_riscv64")
-            echo "musl_riscv64:${RKRGA_OUTPUT_DIR}/musl_riscv64"
+        "riscv64-linux-musl")
+            echo "riscv64-linux-musl:${RKRGA_OUTPUT_DIR}/riscv64-linux-musl"
             ;;
-        "android_arm64_v8a")
-            echo "android_arm64_v8a:${RKRGA_OUTPUT_DIR}/android_arm64_v8a"
+        "aarch64-linux-android")
+            echo "aarch64-linux-android:${RKRGA_OUTPUT_DIR}/aarch64-linux-android"
             ;;
-        "android_armeabi_v7a")
-            echo "android_armeabi_v7a:${RKRGA_OUTPUT_DIR}/android_armeabi_v7a"
+        "arm-linux-android")
+            echo "arm-linux-android:${RKRGA_OUTPUT_DIR}/arm-linux-android"
+            ;;
+        "x86_64-linux-gnu")
+            echo "x86_64-linux-gnu:${RKRGA_OUTPUT_DIR}/x86_64-linux-gnu"
+            ;;
+        "x86_64-windows-gnu")
+            echo "x86_64-windows-gnu:${RKRGA_OUTPUT_DIR}/x86_64-windows-gnu"
+            ;;
+        "x86_64-macos")
+            echo "x86_64-macos:${RKRGA_OUTPUT_DIR}/x86_64-macos"
+            ;;
+        "aarch64-macos")
+            echo "aarch64-macos:${RKRGA_OUTPUT_DIR}/aarch64-macos"
             ;;
         *)
             echo ""
@@ -101,20 +113,41 @@ setup_libdrm_dependency() {
     local libdrm_dir=""
     
     case "$target" in
-        "32bit"|"glibc_arm")
-            libdrm_dir="${OUTPUTS_DIR}/libdrm/32bit"
+        "arm-linux-gnueabihf")
+            libdrm_dir="${OUTPUTS_DIR}/libdrm/arm-linux-gnueabihf"
             ;;
-        "64bit"|"glibc_arm64")
-            libdrm_dir="${OUTPUTS_DIR}/libdrm/64bit"
+        "aarch64-linux-gnu")
+            libdrm_dir="${OUTPUTS_DIR}/libdrm/aarch64-linux-gnu"
             ;;
-        "musl")
-            libdrm_dir="${OUTPUTS_DIR}/libdrm/musl"
+        "arm-linux-musleabihf")
+            libdrm_dir="${OUTPUTS_DIR}/libdrm/arm-linux-musleabihf"
             ;;
-        "android_arm64_v8a")
-            libdrm_dir="${OUTPUTS_DIR}/libdrm/android_arm64_v8a"
+        "aarch64-linux-musl")
+            libdrm_dir="${OUTPUTS_DIR}/libdrm/aarch64-linux-musl"
             ;;
-        "android_armeabi_v7a")
-            libdrm_dir="${OUTPUTS_DIR}/libdrm/android_armeabi_v7a"
+        "riscv64-linux-gnu")
+            libdrm_dir="${OUTPUTS_DIR}/libdrm/riscv64-linux-gnu"
+            ;;
+        "riscv64-linux-musl")
+            libdrm_dir="${OUTPUTS_DIR}/libdrm/riscv64-linux-musl"
+            ;;
+        "aarch64-linux-android")
+            libdrm_dir="${OUTPUTS_DIR}/libdrm/aarch64-linux-android"
+            ;;
+        "arm-linux-android")
+            libdrm_dir="${OUTPUTS_DIR}/libdrm/arm-linux-android"
+            ;;
+        "x86_64-linux-gnu")
+            libdrm_dir="${OUTPUTS_DIR}/libdrm/x86_64-linux-gnu"
+            ;;
+        "x86_64-windows-gnu")
+            libdrm_dir="${OUTPUTS_DIR}/libdrm/x86_64-windows-gnu"
+            ;;
+        "x86_64-macos")
+            libdrm_dir="${OUTPUTS_DIR}/libdrm/x86_64-macos"
+            ;;
+        "aarch64-macos")
+            libdrm_dir="${OUTPUTS_DIR}/libdrm/aarch64-macos"
             ;;
         *)
             libdrm_dir="${OUTPUTS_DIR}/libdrm"
@@ -154,29 +187,41 @@ build_target() {
     # 获取目标架构
     local target_arch=""
     case "$target_name" in
-        "32bit"|"glibc_arm")
+        "arm-linux-gnueabihf")
             target_arch="arm-linux-gnueabihf"
             ;;
-        "64bit"|"glibc_arm64")
+        "aarch64-linux-gnu")
             target_arch="aarch64-linux-gnu"
             ;;
-        "musl"|"musl_arm")
-            target_arch="arm-linux-gnueabihf"
+        "arm-linux-musleabihf")
+            target_arch="arm-linux-musleabihf"
             ;;
-        "musl_arm64")
-            target_arch="aarch64-linux-gnu"
+        "aarch64-linux-musl")
+            target_arch="aarch64-linux-musl"
             ;;
-        "glibc_riscv64")
+        "riscv64-linux-gnu")
             target_arch="riscv64-linux-gnu"
             ;;
-        "musl_riscv64")
-            target_arch="riscv64-linux-gnu"
+        "riscv64-linux-musl")
+            target_arch="riscv64-linux-musl"
             ;;
-        "android_arm64_v8a")
+        "aarch64-linux-android")
             target_arch="aarch64-linux-android"
             ;;
-        "android_armeabi_v7a")
+        "arm-linux-android")
             target_arch="arm-linux-android"
+            ;;
+        "x86_64-linux-gnu")
+            target_arch="x86_64-linux-gnu"
+            ;;
+        "x86_64-windows-gnu")
+            target_arch="x86_64-windows-gnu"
+            ;;
+        "x86_64-macos")
+            target_arch="x86_64-macos"
+            ;;
+        "aarch64-macos")
+            target_arch="aarch64-macos"
             ;;
         *)
             target_arch="unknown"
@@ -184,7 +229,7 @@ build_target() {
     esac
     
     # Android 特殊处理
-    if [[ "$target_name" == "android_"* ]]; then
+    if [[ "$target_name" == *"-android" ]]; then
         local ndk_path="${ANDROID_NDK_HOME:-$HOME/sdk/android_ndk/android-ndk-r21e}"
         if [ ! -d "$ndk_path" ]; then
             log_error "Android NDK not found: $ndk_path"
@@ -196,11 +241,11 @@ build_target() {
         local android_abi=""
         
         case "$target_name" in
-            "android_arm64_v8a")
+            "aarch64-linux-android")
                 android_target="aarch64-linux-android"
                 android_abi="arm64-v8a"
                 ;;
-            "android_armeabi_v7a")
+            "arm-linux-android")
                 android_target="armv7a-linux-androideabi"
                 android_abi="armeabi-v7a"
                 ;;
@@ -233,14 +278,35 @@ EOF
         # 非Android目标：使用交叉编译
         local cross_prefix=""
         case "$target_name" in
-            "32bit"|"glibc_arm"|"musl"|"musl_arm")
+            "arm-linux-gnueabihf")
                 cross_prefix="arm-linux-gnueabihf-"
                 ;;
-            "64bit"|"glibc_arm64"|"musl_arm64")
+            "aarch64-linux-gnu")
                 cross_prefix="aarch64-linux-gnu-"
                 ;;
-            "glibc_riscv64"|"musl_riscv64")
+            "riscv64-linux-gnu")
                 cross_prefix="riscv64-linux-gnu-"
+                ;;
+            "riscv64-linux-musl")
+                cross_prefix="riscv64-linux-musl-"
+                ;;
+            "arm-linux-musleabihf")
+                cross_prefix="arm-linux-musleabihf-"
+                ;;
+            "aarch64-linux-musl")
+                cross_prefix="aarch64-linux-musl-"
+                ;;
+            "x86_64-linux-gnu")
+                cross_prefix="x86_64-linux-gnu-"
+                ;;
+            "x86_64-windows-gnu")
+                cross_prefix="x86_64-w64-mingw32-"
+                ;;
+            "x86_64-macos")
+                cross_prefix="x86_64-apple-darwin-"
+                ;;
+            "aarch64-macos")
+                cross_prefix="aarch64-apple-darwin-"
                 ;;
         esac
         
@@ -418,14 +484,17 @@ validate_build_architecture() {
     
     local expected_arch=""
     case "$target_name" in
-        "32bit"|"glibc_arm"|"musl"|"musl_arm"|"android_armeabi_v7a")
+        "arm-linux-gnueabihf"|"arm-linux-musleabihf"|"arm-linux-android")
             expected_arch="ARM"
             ;;
-        "64bit"|"glibc_arm64"|"musl_arm64"|"android_arm64_v8a")
+        "aarch64-linux-gnu"|"aarch64-linux-musl"|"aarch64-linux-android"|"aarch64-macos")
             expected_arch="AArch64"
             ;;
-        "glibc_riscv64"|"musl_riscv64")
+        "riscv64-linux-gnu"|"riscv64-linux-musl")
             expected_arch="RISC-V"
+            ;;
+        "x86_64-linux-gnu"|"x86_64-windows-gnu"|"x86_64-macos")
+            expected_arch="x86_64"
             ;;
         *)
             expected_arch="Unknown"
@@ -512,7 +581,8 @@ main() {
         fi
     else
         # 构建默认目标
-        local default_targets=("64bit" "32bit" "android_arm64_v8a")
+        # 将_DEFAULT_BUILD_TARGETS字符串转换为数组
+        IFS=',' read -r -a default_targets <<< "$_DEFAULT_BUILD_TARGETS"
         for target in "${default_targets[@]}"; do
             local target_config
             target_config=$(get_target_config "$target")
@@ -528,6 +598,9 @@ main() {
         log_success "All builds completed"
     fi
     
+    # 生成version.ini文件
+    create_version_file
+
     # 显示结果
     log_info "Output directory: $RKRGA_OUTPUT_DIR"
     if command -v tree &> /dev/null; then
@@ -544,29 +617,75 @@ show_help() {
     echo "Usage: $0 [TARGET]"
     echo ""
     echo "TARGET (optional):"
-    echo "  32bit              Build ARM 32-bit glibc version"
-    echo "  64bit              Build ARM 64-bit glibc version"
-    echo "  glibc_arm          Alias for 32bit"
-    echo "  glibc_arm64        Alias for 64bit"
-    echo "  musl               Build ARM 32-bit musl version"
-    echo "  musl_arm           Build ARM 32-bit musl version"
-    echo "  musl_arm64         Build ARM 64-bit musl version"
-    echo "  glibc_riscv64      Build RISC-V 64-bit glibc version"
-    echo "  musl_riscv64       Build RISC-V 64-bit musl version"
-    echo "  android_arm64_v8a  Build Android ARM 64-bit version"
-    echo "  android_armeabi_v7a Build Android ARM 32-bit version"
+    echo "  aarch64-linux-gnu      Build ARM 64-bit glibc version"
+    echo "  arm-linux-gnueabihf    Build ARM 32-bit glibc version"
+    echo "  aarch64-linux-musl     Build ARM 64-bit musl version"
+    echo "  arm-linux-musleabihf   Build ARM 32-bit musl version"
+    echo "  riscv64-linux-gnu      Build RISC-V 64-bit glibc version"
+    echo "  riscv64-linux-musl     Build RISC-V 64-bit musl version"
+    echo "  aarch64-linux-android  Build Android ARM 64-bit version"
+    echo "  arm-linux-android      Build Android ARM 32-bit version"
+    echo "  x86_64-linux-gnu       Build x86 64-bit Linux version"
+    echo "  x86_64-windows-gnu     Build x86 64-bit Windows version"
+    echo "  x86_64-macos           Build x86 64-bit macOS version"
+    echo "  aarch64-macos          Build ARM 64-bit macOS version"
     echo ""
     echo "Examples:"
-    echo "  $0                    # Build default targets (64bit, 32bit, android_arm64_v8a)"
-    echo "  $0 64bit              # Build only ARM 64-bit version"
-    echo "  $0 android_arm64_v8a   # Build Android ARM 64-bit version"
-    echo "  $0 musl_arm           # Build ARM 32-bit musl version"
-    echo "  $0 glibc_riscv64      # Build RISC-V 64-bit glibc version"
+    echo "  $0                    # Build default targets ($_DEFAULT_BUILD_TARGETS)"
+    echo "  $0 aarch64-linux-gnu  # Build only ARM 64-bit GNU libc version"
+    echo "  $0 aarch64-linux-android  # Build Android ARM 64-bit version"
+    echo "  $0 arm-linux-musleabihf  # Build ARM 32-bit musl version"
+    echo "  $0 aarch64-linux-musl    # Build ARM 64-bit musl version"
+    echo "  $0 x86_64-linux-gnu      # Build x86 64-bit Linux version"
+    echo "  $0 --clean            # Clean all build artifacts"
     echo ""
     echo "Environment Variables:"
     echo "  ANDROID_NDK_HOME      Path to Android NDK (default: ~/sdk/android_ndk/android-ndk-r21e)"
     echo ""
 }
+
+# 创建版本信息文件
+create_version_file() {
+    log_info "Creating version.ini file..."
+    
+    local version_file="${RKRGA_OUTPUT_DIR}/version.ini"
+    local changelog_file="${LIBRGA_SOURCE_DIR}/CHANGELOG.md"
+    
+    # 检查CHANGELOG.md是否存在
+    if [ ! -f "$changelog_file" ]; then
+        log_warning "CHANGELOG.md not found: $changelog_file"
+        echo "version=unknown" > "$version_file"
+        log_warning "Created version.ini with unknown version"
+        return 0
+    fi
+    
+    # 提取最新版本号（格式：## 1.10.4 （2025-04-03））
+    local latest_version
+    latest_version=$(grep -E "^## [0-9]+\.[0-9]+\.[0-9]+" "$changelog_file" | head -1 | sed -E 's/^## ([0-9]+\.[0-9]+\.[0-9]+).*/\1/')
+    
+    if [ -z "$latest_version" ]; then
+        log_warning "Could not extract version from CHANGELOG.md"
+        echo "version=unknown" > "$version_file"
+        log_warning "Created version.ini with unknown version"
+        return 0
+    fi
+    
+    # 写入版本信息到version.ini
+    cat > "$version_file" << EOF
+[version]
+version=$latest_version
+EOF
+    
+    if [ $? -eq 0 ]; then
+        log_success "Version file created successfully: $version_file"
+        log_info "Latest version: $latest_version"
+    else
+        log_error "Failed to create version file: $version_file"
+        return 1
+    fi
+}
+
+
 
 # 清理函数
 cleanup() {

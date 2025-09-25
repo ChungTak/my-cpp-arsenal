@@ -17,7 +17,7 @@ RKMPP_OUTPUT_DIR="${OUTPUTS_DIR}/rkmpp"
 MPP_SOURCE_DIR="${SOURCES_DIR}/rkmpp"
 
 # 限制默认编译目标
-_DEFAULT_BUILD_TARGETS="glibc_arm64,glibc_arm,android_arm64_v8a,android_armeabi_v7a"
+_DEFAULT_BUILD_TARGETS="aarch64-linux-gnu,arm-linux-gnueabihf,aarch64-linux-android,arm-linux-android"
 
 # 颜色输出
 RED='\033[0;31m'
@@ -538,7 +538,7 @@ compress_libraries() {
 init_android_env() {
     local target="$1"
     
-    if [[ "$target" == "android_"* ]]; then
+    if [[ "$target" == "aarch64-linux-android" || "$target" == "arm-linux-android" ]]; then
         # 展开波浪号路径
         local default_ndk_path
         default_ndk_path=$(eval echo "~/sdk/android_ndk/android-ndk-r21e")
@@ -549,11 +549,11 @@ init_android_env() {
         API_LEVEL=23
 
         case "$target" in
-            android_arm64_v8a)
+            aarch64-linux-android)
                 ANDROID_ABI=arm64-v8a
                 log_info "Initializing Android NDK for arm64-v8a (API $API_LEVEL)"
                 ;;
-            android_armeabi_v7a)
+            arm-linux-android)
                 ANDROID_ABI=armeabi-v7a
                 log_info "Initializing Android NDK for armeabi-v7a (API $API_LEVEL)"
                 ;;
@@ -587,40 +587,43 @@ init_android_env() {
 get_target_config() {
     local target_name="$1"
     
-    # 定义目标映射 - 处理别名
+    # 定义目标映射
     case "$target_name" in
-        "glibc_arm")
-            echo "32bit:${TOOLCHAIN_DIR}/arm-linux-gnueabihf.cmake:${RKMPP_OUTPUT_DIR}/32bit"
+        "arm-linux-gnueabihf")
+            echo "arm-linux-gnueabihf:${TOOLCHAIN_DIR}/arm-linux-gnueabihf.cmake:${RKMPP_OUTPUT_DIR}/arm-linux-gnueabihf"
             ;;
-        "glibc_arm64")
-            echo "64bit:${TOOLCHAIN_DIR}/aarch64-linux-gnu.cmake:${RKMPP_OUTPUT_DIR}/64bit"
+        "aarch64-linux-gnu")
+            echo "aarch64-linux-gnu:${TOOLCHAIN_DIR}/aarch64-linux-gnu.cmake:${RKMPP_OUTPUT_DIR}/aarch64-linux-gnu"
             ;;
-        "musl_arm")
-            echo "musl:${TOOLCHAIN_DIR}/aarch64-none-linux-musl.cmake:${RKMPP_OUTPUT_DIR}/musl"
+        "arm-linux-musleabihf")
+            echo "arm-linux-musleabihf:${TOOLCHAIN_DIR}/arm-none-linux-musleabihf.cmake:${RKMPP_OUTPUT_DIR}/arm-linux-musleabihf"
             ;;
-        "32bit")
-            echo "32bit:${TOOLCHAIN_DIR}/arm-linux-gnueabihf.cmake:${RKMPP_OUTPUT_DIR}/32bit"
+        "riscv64-linux-gnu")
+            echo "riscv64-linux-gnu:${TOOLCHAIN_DIR}/riscv64-linux-gnu.cmake:${RKMPP_OUTPUT_DIR}/riscv64-linux-gnu"
             ;;
-        "64bit")
-            echo "64bit:${TOOLCHAIN_DIR}/aarch64-linux-gnu.cmake:${RKMPP_OUTPUT_DIR}/64bit"
+        "riscv64-linux-musl")
+            echo "riscv64-linux-musl:${TOOLCHAIN_DIR}/riscv64-linux-musl.cmake:${RKMPP_OUTPUT_DIR}/riscv64-linux-musl"
             ;;
-        "glibc_riscv64")
-            echo "glibc_riscv64:${TOOLCHAIN_DIR}/riscv64-unknown-linux-gnu.cmake:${RKMPP_OUTPUT_DIR}/glibc_riscv64"
+        "aarch64-linux-musl")
+            echo "aarch64-linux-musl:${TOOLCHAIN_DIR}/aarch64-linux-musl.cmake:${RKMPP_OUTPUT_DIR}/aarch64-linux-musl"
             ;;
-        "musl")
-            echo "musl:${TOOLCHAIN_DIR}/aarch64-none-linux-musl.cmake:${RKMPP_OUTPUT_DIR}/musl"
+        "aarch64-linux-android")
+            echo "aarch64-linux-android:android:${RKMPP_OUTPUT_DIR}/aarch64-linux-android"
             ;;
-        "musl_arm64")
-            echo "musl_arm64:${TOOLCHAIN_DIR}/arm-none-linux-musleabihf.cmake:${RKMPP_OUTPUT_DIR}/musl_arm64"
+        "arm-linux-android")
+            echo "arm-linux-android:android:${RKMPP_OUTPUT_DIR}/arm-linux-android"
             ;;
-        "musl_riscv64")
-            echo "musl_riscv64:${TOOLCHAIN_DIR}/riscv64-unknown-linux-musl.cmake:${RKMPP_OUTPUT_DIR}/musl_riscv64"
+        "x86_64-linux-gnu")
+            echo "x86_64-linux-gnu:${TOOLCHAIN_DIR}/x86_64-linux-gnu.cmake:${RKMPP_OUTPUT_DIR}/x86_64-linux-gnu"
             ;;
-        "android_arm64_v8a")
-            echo "android_arm64_v8a:android:${RKMPP_OUTPUT_DIR}/android_arm64_v8a"
+        "x86_64-windows-gnu")
+            echo "x86_64-windows-gnu:${TOOLCHAIN_DIR}/x86_64-windows-gnu.cmake:${RKMPP_OUTPUT_DIR}/x86_64-windows-gnu"
             ;;
-        "android_armeabi_v7a")
-            echo "android_armeabi_v7a:android:${RKMPP_OUTPUT_DIR}/android_armeabi_v7a"
+        "x86_64-macos")
+            echo "x86_64-macos:${TOOLCHAIN_DIR}/x86_64-macos.cmake:${RKMPP_OUTPUT_DIR}/x86_64-macos"
+            ;;
+        "aarch64-macos")
+            echo "aarch64-macos:${TOOLCHAIN_DIR}/aarch64-macos.cmake:${RKMPP_OUTPUT_DIR}/aarch64-macos"
             ;;
         *)
             echo ""
@@ -633,14 +636,18 @@ get_default_build_targets() {
     # 如果私有变量不存在或为空，返回所有目标的配置
     if [ -z "$_DEFAULT_BUILD_TARGETS" ]; then
         # 所有目标的配置
-        echo "32bit:${TOOLCHAIN_DIR}/arm-linux-gnueabihf.cmake:${RKMPP_OUTPUT_DIR}/32bit"
-        echo "64bit:${TOOLCHAIN_DIR}/aarch64-linux-gnu.cmake:${RKMPP_OUTPUT_DIR}/64bit"
-        echo "glibc_riscv64:${TOOLCHAIN_DIR}/riscv64-unknown-linux-gnu.cmake:${RKMPP_OUTPUT_DIR}/glibc_riscv64"
-        echo "musl:${TOOLCHAIN_DIR}/aarch64-none-linux-musl.cmake:${RKMPP_OUTPUT_DIR}/musl"
-        echo "musl_arm64:${TOOLCHAIN_DIR}/arm-none-linux-musleabihf.cmake:${RKMPP_OUTPUT_DIR}/musl_arm64"
-        echo "musl_riscv64:${TOOLCHAIN_DIR}/riscv64-unknown-linux-musl.cmake:${RKMPP_OUTPUT_DIR}/musl_riscv64"
-        echo "android_arm64_v8a:android:${RKMPP_OUTPUT_DIR}/android_arm64_v8a"
-        echo "android_armeabi_v7a:android:${RKMPP_OUTPUT_DIR}/android_armeabi_v7a"
+        echo "arm-linux-gnueabihf:${TOOLCHAIN_DIR}/arm-linux-gnueabihf.cmake:${RKMPP_OUTPUT_DIR}/arm-linux-gnueabihf"
+        echo "aarch64-linux-gnu:${TOOLCHAIN_DIR}/aarch64-linux-gnu.cmake:${RKMPP_OUTPUT_DIR}/aarch64-linux-gnu"
+        echo "arm-linux-musleabihf:${TOOLCHAIN_DIR}/arm-none-linux-musleabihf.cmake:${RKMPP_OUTPUT_DIR}/arm-linux-musleabihf"
+        echo "riscv64-linux-gnu:${TOOLCHAIN_DIR}/riscv64-linux-gnu.cmake:${RKMPP_OUTPUT_DIR}/riscv64-linux-gnu"
+        echo "riscv64-linux-musl:${TOOLCHAIN_DIR}/riscv64-linux-musl.cmake:${RKMPP_OUTPUT_DIR}/riscv64-linux-musl"
+        echo "aarch64-linux-musl:${TOOLCHAIN_DIR}/aarch64-linux-musl.cmake:${RKMPP_OUTPUT_DIR}/aarch64-linux-musl"
+        echo "aarch64-linux-android:android:${RKMPP_OUTPUT_DIR}/aarch64-linux-android"
+        echo "arm-linux-android:android:${RKMPP_OUTPUT_DIR}/arm-linux-android"
+        echo "x86_64-linux-gnu:${TOOLCHAIN_DIR}/x86_64-linux-gnu.cmake:${RKMPP_OUTPUT_DIR}/x86_64-linux-gnu"
+        echo "x86_64-windows-gnu:${TOOLCHAIN_DIR}/x86_64-windows-gnu.cmake:${RKMPP_OUTPUT_DIR}/x86_64-windows-gnu"
+        echo "x86_64-macos:${TOOLCHAIN_DIR}/x86_64-macos.cmake:${RKMPP_OUTPUT_DIR}/x86_64-macos"
+        echo "aarch64-macos:${TOOLCHAIN_DIR}/aarch64-macos.cmake:${RKMPP_OUTPUT_DIR}/aarch64-macos"
         return 0
     fi
     
@@ -664,7 +671,7 @@ get_default_build_targets() {
 # 验证目标名称
 validate_target() {
     local target="$1"
-    local valid_targets=("32bit" "64bit" "glibc_riscv64" "musl" "musl_arm64" "musl_riscv64" "glibc_arm" "glibc_arm64" "musl_arm" "android_arm64_v8a" "android_armeabi_v7a")
+    local valid_targets=("arm-linux-gnueabihf" "aarch64-linux-gnu" "arm-linux-musleabihf" "riscv64-linux-gnu" "riscv64-linux-musl" "aarch64-linux-musl" "aarch64-linux-android" "arm-linux-android" "x86_64-linux-gnu" "x86_64-windows-gnu" "x86_64-macos" "aarch64-macos")
     
     for valid in "${valid_targets[@]}"; do
         if [ "$target" = "$valid" ]; then
@@ -701,7 +708,7 @@ parse_arguments() {
     # 验证目标名称（如果提供了）
     if [ -n "$target" ] && ! validate_target "$target"; then
         log_error "Invalid target: $target"
-        log_error "Valid targets: 32bit, 64bit, glibc_riscv64, musl, musl_arm64, musl_riscv64, glibc_arm, glibc_arm64, musl_arm, android_arm64_v8a, android_armeabi_v7a"
+        log_error "Valid targets: arm-linux-gnueabihf, aarch64-linux-gnu, arm-linux-musleabihf, riscv64-linux-gnu, riscv64-linux-musl, aarch64-linux-musl, aarch64-linux-android, arm-linux-android, x86_64-linux-gnu, x86_64-windows-gnu, x86_64-macos, aarch64-macos"
         exit 1
     fi
     
@@ -738,7 +745,7 @@ main() {
         IFS=':' read -r target_name toolchain_file output_dir <<< "$target_config"
         
         # 检查是否为Android目标
-        if [[ "$target_to_build" == "android_"* ]]; then
+        if [[ "$target_to_build" == "aarch64-linux-android" || "$target_to_build" == "arm-linux-android" ]]; then
             # Android目标使用专门的构建函数
             if build_android_target "$target_name" "$output_dir"; then
                 log_success "$target_to_build build completed successfully"
@@ -787,7 +794,7 @@ main() {
             IFS=':' read -r target_name toolchain_file output_dir <<< "$target_config"
             
             # 检查是否为Android目标
-            if [[ "$target_name" == "android_"* ]]; then
+            if [[ "$target_name" == "aarch64-linux-android" || "$target_name" == "arm-linux-android" ]]; then
                 # Android目标使用专门的构建函数
                 if ! build_android_target "$target_name" "$output_dir"; then
                     log_warning "Failed to build $target_name, continuing with next target"
@@ -899,17 +906,18 @@ show_help() {
     echo "Usage: $0 [OPTIONS] [TARGET]"
     echo ""
     echo "TARGET (optional):"
-    echo "  32bit           Build ARM 32-bit glibc version"
-    echo "  64bit           Build ARM 64-bit glibc version"
-    echo "  glibc_riscv64   Build RISC-V 64-bit glibc version"
-    echo "  musl            Build ARM 64-bit musl version"
-    echo "  musl_arm64      Build ARM 32-bit musl version"
-    echo "  musl_riscv64    Build RISC-V 64-bit musl version"
-    echo "  glibc_arm       Alias for 32bit"
-    echo "  glibc_arm64     Alias for 64bit"
-    echo "  musl_arm        Alias for musl"
-    echo "  android_arm64_v8a     Build Android ARM 64-bit version"
-    echo "  android_armeabi_v7a   Build Android ARM 32-bit version"
+    echo "  arm-linux-gnueabihf    Build ARM 32-bit glibc version"
+    echo "  aarch64-linux-gnu      Build ARM 64-bit glibc version"
+    echo "  riscv64-linux-gnu      Build RISC-V 64-bit glibc version"
+    echo "  arm-linux-musleabihf   Build ARM 32-bit musl version"
+    echo "  aarch64-linux-musl     Build ARM 64-bit musl version"
+    echo "  riscv64-linux-musl     Build RISC-V 64-bit musl version"
+    echo "  aarch64-linux-android  Build Android ARM 64-bit version"
+    echo "  arm-linux-android      Build Android ARM 32-bit version"
+    echo "  x86_64-linux-gnu       Build x86_64 Linux version"
+    echo "  x86_64-windows-gnu     Build x86_64 Windows version"
+    echo "  x86_64-macos           Build x86_64 macOS version"
+    echo "  aarch64-macos          Build ARM 64-bit macOS version"
     echo ""
     echo "Options:"
     echo "  -h, --help     Show this help message"
@@ -921,12 +929,12 @@ show_help() {
     echo "  ANDROID_NDK_HOME      Path to Android NDK (default: ~/sdk/android_ndk/android-ndk-r21e)"
     echo ""
     echo "Examples:"
-    echo "  $0                    # Build default targets (glibc_arm64, glibc_arm, android_arm64_v8a, android_armeabi_v7a)"
-    echo "  $0 glibc_arm64        # Build only ARM 64-bit glibc version"
-    echo "  $0 64bit              # Same as above"
-    echo "  $0 musl               # Build only ARM 64-bit musl version"
-    echo "  $0 android_arm64_v8a  # Build Android ARM 64-bit version"
-    echo "  $0 android_armeabi_v7a # Build Android ARM 32-bit version"
+    echo "  $0                    # Build default targets (aarch64-linux-gnu, arm-linux-gnueabihf, aarch64-linux-android, arm-linux-android)"
+    echo "  $0 aarch64-linux-gnu  # Build only ARM 64-bit glibc version"
+    echo "  $0 arm-linux-musleabihf # Build only ARM 32-bit musl version"
+    echo "  $0 aarch64-linux-android # Build Android ARM 64-bit version"
+    echo "  $0 arm-linux-android   # Build Android ARM 32-bit version"
+    echo "  $0 x86_64-linux-gnu   # Build x86_64 Linux version"
     echo "  $0 --clean           # Clean build directories"
     echo "  $0 --clean-all       # Clean everything"
     echo ""

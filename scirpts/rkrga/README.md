@@ -17,20 +17,18 @@
 
 | 目录名 | 工具链 | 架构 | C库 | 说明 |
 |--------|--------|------|-----|------|
-| 32bit | arm-linux-gnueabihf-gcc | ARM 32-bit | glibc | 标准 ARM 32位 |
-| 64bit | aarch64-linux-gnu-gcc | ARM 64-bit | glibc | 标准 ARM 64位 |
-| glibc_riscv64 | riscv64-linux-gnu-gcc | RISC-V 64-bit | glibc | RISC-V 64位 |
-| musl | aarch64-linux-musl-gcc | ARM 64-bit | musl | ARM 64位 musl |
-| musl_arm64 | arm-linux-musleabihf-gcc | ARM 32-bit | musl | ARM 32位 musl |
-| musl_riscv64 | riscv64-linux-musl-gcc | RISC-V 64-bit | musl | RISC-V 64位 musl |
-
-## 软链接
-
-为了兼容不同的命名约定，脚本会自动创建以下软链接：
-
-- `glibc_arm` → `32bit`
-- `glibc_arm64` → `64bit`  
-- `musl_arm` → `musl`
+| arm-linux-gnueabihf | arm-linux-gnueabihf-gcc | ARM 32-bit | glibc | 标准 ARM 32位 |
+| aarch64-linux-gnu | aarch64-linux-gnu-gcc | ARM 64-bit | glibc | 标准 ARM 64位 |
+| riscv64-linux-gnu | riscv64-linux-gnu-gcc | RISC-V 64-bit | glibc | RISC-V 64位 |
+| aarch64-linux-musl | aarch64-linux-musl-gcc | ARM 64-bit | musl | ARM 64位 musl |
+| arm-linux-musleabihf | arm-linux-musleabihf-gcc | ARM 32-bit | musl | ARM 32位 musl |
+| riscv64-linux-musl | riscv64-linux-musl-gcc | RISC-V 64-bit | musl | RISC-V 64位 musl |
+| aarch64-linux-android | aarch64-linux-android-clang | ARM 64-bit | bionic | Android ARM 64位 |
+| arm-linux-android | arm-linux-androideabi-clang | ARM 32-bit | bionic | Android ARM 32位 |
+| x86_64-linux-gnu | x86_64-linux-gnu-gcc | x86_64 | glibc | x86_64 Linux 版本 |
+| x86_64-windows-gnu | x86_64-w64-mingw32-gcc | x86_64 | msvcrt | x86_64 Windows 版本 |
+| x86_64-macos | x86_64-apple-darwin-clang | x86_64 | libc | x86_64 macOS 版本 |
+| aarch64-macos | aarch64-apple-darwin-clang | ARM64 | libc | ARM64 macOS 版本 |
 
 ## 使用方法
 
@@ -41,9 +39,9 @@
 ./scirpts/rkrga/build.sh
 
 # 构建指定的单个架构
-./scirpts/rkrga/build.sh glibc_arm64   # 构建ARM 64位 glibc版本
-./scirpts/rkrga/build.sh 64bit         # 同上（别名）
-./scirpts/rkrga/build.sh musl          # 构建ARM 64位 musl版本
+./scirpts/rkrga/build.sh aarch64-linux-gnu   # 构建ARM 64位 glibc版本
+./scirpts/rkrga/build.sh aarch64-linux-musl  # 构建ARM 64位 musl版本
+./scirpts/rkrga/build.sh aarch64-linux-android  # 构建Android ARM 64位版本
 
 # 显示帮助信息
 ./scirpts/rkrga/build.sh --help
@@ -68,14 +66,21 @@
 ./scirpts/rkrga/build.sh
 
 # 构建单个目标
-./scirpts/rkrga/build.sh glibc_arm64
+./scirpts/rkrga/build.sh aarch64-linux-gnu
 
 # 使用自定义工具链路径构建特定目标
 export TOOLCHAIN_ROOT_DIR=/opt/gcc-arm-10.3-2021.07-x86_64-aarch64-linux-gnu
-./scirpts/rkrga/build.sh glibc_arm64
+./scirpts/rkrga/build.sh aarch64-linux-gnu
 
-# 只构建64位目标（需要安装 aarch64-linux-gnu-gcc）
-./scirpts/rkrga/build.sh 64bit
+# 构建Android目标（需要设置ANDROID_NDK_HOME环境变量）
+export ANDROID_NDK_HOME=/opt/android-ndk-r25c
+./scirpts/rkrga/build.sh aarch64-linux-android
+
+# 构建Windows目标
+./scirpts/rkrga/build.sh x86_64-windows-gnu
+
+# 构建macOS目标
+./scirpts/rkrga/build.sh aarch64-macos
 ```
 
 ## 输出结构
@@ -84,20 +89,24 @@ export TOOLCHAIN_ROOT_DIR=/opt/gcc-arm-10.3-2021.07-x86_64-aarch64-linux-gnu
 
 ```
 outputs/rkrga/
-├── 32bit/           # ARM 32-bit glibc
+├── arm-linux-gnueabihf/    # ARM 32-bit glibc
 │   ├── bin/
 │   ├── include/
 │   └── lib/
-├── 64bit/           # ARM 64-bit glibc  
+├── aarch64-linux-gnu/      # ARM 64-bit glibc  
 │   ├── bin/
 │   ├── include/
 │   └── lib/
-├── glibc_riscv64/   # RISC-V 64-bit glibc
-├── musl/            # ARM 64-bit musl
-├── musl_arm64/      # ARM 32-bit musl
-├── musl_riscv64/    # RISC-V 64-bit musl
-├── glibc_arm -> 32bit      # 软链接
-├── glibc_arm64 -> 64bit    # 软链接
+├── riscv64-linux-gnu/      # RISC-V 64-bit glibc
+├── aarch64-linux-musl/     # ARM 64-bit musl
+├── arm-linux-musleabihf/   # ARM 32-bit musl
+├── riscv64-linux-musl/     # RISC-V 64-bit musl
+├── aarch64-linux-android/  # Android ARM 64-bit
+├── arm-linux-android/      # Android ARM 32-bit
+├── x86_64-linux-gnu/       # x86_64 Linux
+├── x86_64-windows-gnu/     # x86_64 Windows
+├── x86_64-macos/           # x86_64 macOS
+├── aarch64-macos/          # ARM64 macOS
 └── musl_arm -> musl        # 软链接
 ```
 

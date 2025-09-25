@@ -28,30 +28,35 @@
 ## 支持的目标平台
 
 ### 常规 Linux 目标
-- `32bit` / `glibc_arm` - ARM 32位 glibc 版本
-- `64bit` / `glibc_arm64` - ARM 64位 glibc 版本
-- `glibc_riscv64` - RISC-V 64位 glibc 版本
-- `musl` / `musl_arm` - ARM 64位 musl 版本  
-- `musl_arm64` - ARM 32位 musl 版本
-- `musl_riscv64` - RISC-V 64位 musl 版本
+- `arm-linux-gnueabihf` - ARM 32位 glibc 版本
+- `aarch64-linux-gnu` - ARM 64位 glibc 版本
+- `riscv64-linux-gnu` - RISC-V 64位 glibc 版本
+- `aarch64-linux-musl` - ARM 64位 musl 版本
+- `arm-linux-musleabihf` - ARM 32位 musl 版本
+- `riscv64-linux-musl` - RISC-V 64位 musl 版本
+- `x86_64-linux-gnu` - x86_64 Linux 版本
 
 ### Android 目标
-- `android_arm64_v8a` - Android ARM 64位版本
-- `android_armeabi_v7a` - Android ARM 32位版本
+- `aarch64-linux-android` - Android ARM 64位版本
+- `arm-linux-android` - Android ARM 32位版本
+
+### 其他平台
+- `x86_64-windows-gnu` - x86_64 Windows 版本
+- `x86_64-macos` - x86_64 macOS 版本
+- `aarch64-macos` - ARM64 macOS 版本
 
 ## 使用方法
 
 ### 基本用法
 
 ```bash
-# 构建默认目标（glibc_arm64, glibc_arm, android_arm64_v8a, android_armeabi_v7a）
+# 构建默认目标（aarch64-linux-gnu, arm-linux-musleabihf, aarch64-linux-android, arm-linux-android）
 ./build.sh
 
 # 构建特定目标
-./build.sh glibc_arm64    # ARM 64位 glibc 版本
-./build.sh 64bit          # 同上（别名）
-./build.sh musl           # ARM 64位 musl 版本
-./build.sh android_arm64_v8a  # Android ARM 64位版本
+./build.sh aarch64-linux-gnu    # ARM 64位 glibc 版本
+./build.sh aarch64-linux-musl   # ARM 64位 musl 版本
+./build.sh aarch64-linux-android  # Android ARM 64位版本
 
 # 显示帮助信息
 ./build.sh --help
@@ -143,18 +148,19 @@ default_library = 'both'
 
 ```
 outputs/libdrm/
-├── 32bit/          # ARM 32位 glibc 版本
-├── 64bit/          # ARM 64位 glibc 版本
-├── glibc_riscv64/  # RISC-V 64位 glibc 版本
-├── musl/           # ARM 64位 musl 版本
-├── musl_arm64/     # ARM 32位 musl 版本
-├── musl_riscv64/   # RISC-V 64位 musl 版本
-├── android_arm64_v8a/     # Android ARM 64位版本
-├── android_armeabi_v7a/   # Android ARM 32位版本
-├── glibc_arm -> 32bit     # 符号链接
-├── glibc_arm64 -> 64bit   # 符号链接
-├── musl_arm -> musl       # 符号链接
-└── version.ini     # 版本信息文件
+├── arm-linux-gnueabihf/    # ARM 32位 glibc 版本
+├── aarch64-linux-gnu/      # ARM 64位 glibc 版本
+├── riscv64-linux-gnu/      # RISC-V 64位 glibc 版本
+├── aarch64-linux-musl/     # ARM 64位 musl 版本
+├── arm-linux-musleabihf/   # ARM 32位 musl 版本
+├── riscv64-linux-musl/     # RISC-V 64位 musl 版本
+├── aarch64-linux-android/  # Android ARM 64位版本
+├── arm-linux-android/      # Android ARM 32位版本
+├── x86_64-linux-gnu/       # x86_64 Linux 版本
+├── x86_64-windows-gnu/     # x86_64 Windows 版本
+├── x86_64-macos/           # x86_64 macOS 版本
+├── aarch64-macos/          # ARM64 macOS 版本
+└── version.ini             # 版本信息文件
 ```
 
 每个目标目录包含：
@@ -206,7 +212,7 @@ outputs/libdrm/
 查看详细的构建日志：
 ```bash
 # 启用详细输出
-./build.sh glibc_arm64 2>&1 | tee build.log
+./build.sh aarch64-linux-gnu 2>&1 | tee build.log
 ```
 
 ## 与 rkrga 构建脚本的差异

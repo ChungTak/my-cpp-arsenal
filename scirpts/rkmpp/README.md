@@ -22,7 +22,7 @@ cd scirpts/rkmpp
 ./build.sh
 
 # 构建特定目标
-./build.sh glibc_arm64
+./build.sh aarch64-linux-gnu
 
 # 显示帮助信息
 ./build.sh --help
@@ -36,14 +36,18 @@ cd scirpts/rkmpp
 
 ### 支持的目标平台
 
-- `glibc_arm64` - ARM 64位 glibc 版本
-- `glibc_arm` - ARM 32位 glibc 版本
-- `android_arm64_v8a` - Android ARM 64位版本
-- `android_armeabi_v7a` - Android ARM 32位版本
-- `musl` - ARM 64位 musl 版本
-- `musl_arm64` - ARM 32位 musl 版本
-- `glibc_riscv64` - RISC-V 64位 glibc 版本
-- `musl_riscv64` - RISC-V 64位 musl 版本
+- `aarch64-linux-gnu` - ARM 64位 glibc 版本
+- `arm-linux-gnueabihf` - ARM 32位 glibc 版本
+- `aarch64-linux-android` - Android ARM 64位版本
+- `arm-linux-android` - Android ARM 32位版本
+- `aarch64-linux-musl` - ARM 64位 musl 版本
+- `arm-linux-musleabihf` - ARM 32位 musl 版本
+- `riscv64-linux-gnu` - RISC-V 64位 glibc 版本
+- `riscv64-linux-musl` - RISC-V 64位 musl 版本
+- `x86_64-linux-gnu` - x86_64 Linux 版本
+- `x86_64-windows-gnu` - x86_64 Windows 版本
+- `x86_64-macos` - x86_64 macOS 版本
+- `aarch64-macos` - ARM64 macOS 版本
 
 ### 环境变量
 
