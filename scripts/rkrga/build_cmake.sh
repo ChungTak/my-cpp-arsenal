@@ -71,46 +71,67 @@ get_cross_compile_prefix() {
     fi
 }
 
-# 检查交叉编译工具是否可用
-check_cross_compile_tools() {
+# 检查压缩工具是否可用
+check_compression_tools() {
     local cross_prefix="$1"
     local target_name="$2"
+    local is_android="$3"
     
-    log_info "Checking cross-compile tools for $target_name (prefix: ${cross_prefix:-'system'})..."
+    log_info "Checking compression tools for $target_name (prefix: ${cross_prefix:-'system'})..."
     
-    # 检查压缩相关工具
     local tools_status=""
     
-    # strip 工具
-    if [ -n "$cross_prefix" ]; then
-        if command -v "${cross_prefix}strip" &> /dev/null; then
-            tools_status="${tools_status}strip:${cross_prefix}strip "
-        elif command -v "strip" &> /dev/null; then
-            tools_status="${tools_status}strip:strip "
+    # 根据目标类型选择工具检查策略
+    if [ "$is_android" = "true" ]; then
+        # Android专用工具检查
+        local strip_cmd=""
+        case "$target_name" in
+            "aarch64-linux-android")
+                strip_cmd="$TOOLCHAIN/bin/aarch64-linux-android-strip"
+                ;;
+            "arm-linux-android")
+                strip_cmd="$TOOLCHAIN/bin/arm-linux-androideabi-strip"
+                ;;
+        esac
+        
+        if [ -n "$strip_cmd" ] && command -v "$strip_cmd" &> /dev/null; then
+            tools_status="${tools_status}strip:$strip_cmd "
         fi
     else
-        if command -v "strip" &> /dev/null; then
-            tools_status="${tools_status}strip:strip "
+        # 通用工具检查
+        # strip 工具
+        if [ -n "$cross_prefix" ]; then
+            if command -v "${cross_prefix}strip" &> /dev/null; then
+                tools_status="${tools_status}strip:${cross_prefix}strip "
+            elif command -v "strip" &> /dev/null; then
+                tools_status="${tools_status}strip:strip "
+            fi
+        else
+            if command -v "strip" &> /dev/null; then
+                tools_status="${tools_status}strip:strip "
+            fi
+        fi
+        
+        # objcopy 工具
+        if [ -n "$cross_prefix" ]; then
+            if command -v "${cross_prefix}objcopy" &> /dev/null; then
+                tools_status="${tools_status}objcopy:${cross_prefix}objcopy "
+            elif command -v "objcopy" &> /dev/null; then
+                tools_status="${tools_status}objcopy:objcopy "
+            fi
+        else
+            if command -v "objcopy" &> /dev/null; then
+                tools_status="${tools_status}objcopy:objcopy "
+            fi
+        fi
+        
+        # UPX 和通用压缩工具
+        if command -v "upx" &> /dev/null; then
+            tools_status="${tools_status}upx:upx "
         fi
     fi
     
-    # objcopy 工具
-    if [ -n "$cross_prefix" ]; then
-        if command -v "${cross_prefix}objcopy" &> /dev/null; then
-            tools_status="${tools_status}objcopy:${cross_prefix}objcopy "
-        elif command -v "objcopy" &> /dev/null; then
-            tools_status="${tools_status}objcopy:objcopy "
-        fi
-    else
-        if command -v "objcopy" &> /dev/null; then
-            tools_status="${tools_status}objcopy:objcopy "
-        fi
-    fi
-    
-    # UPX 和通用压缩工具
-    if command -v "upx" &> /dev/null; then
-        tools_status="${tools_status}upx:upx "
-    fi
+    # 通用压缩工具（Android和Linux都可用）
     if command -v "xz" &> /dev/null; then
         tools_status="${tools_status}xz:xz "
     fi
@@ -120,6 +141,8 @@ check_cross_compile_tools() {
     
     echo "$tools_status"
 }
+
+
 # 检查必要的工具
 check_tools() {
     local tools=("git" "cmake" "make")
@@ -256,190 +279,23 @@ build_android_target() {
     
     log_success "$target_name build completed successfully"
     
-    # Android版本的压缩处理
-    compress_android_libraries "$output_dir" "$target_name"
-    
-    # 返回到工作目录
-    cd "$WORKSPACE_DIR"
-}
-
-# Android库文件压缩
-compress_android_libraries() {
-    local output_dir="$1"
-    local target_name="$2"
-    
-    log_info "Compressing Android libraries for $target_name..."
-    
-    # Android下可用的工具（主要是strip）
-    local strip_cmd=""
-    local available_tools=""
-    
-    # 检查Android NDK中的strip工具
-    case "$ANDROID_ABI" in
-        "arm64-v8a")
-            strip_cmd="$TOOLCHAIN/bin/aarch64-linux-android-strip"
-            ;;
-        "armeabi-v7a")
-            strip_cmd="$TOOLCHAIN/bin/arm-linux-androideabi-strip"
-            ;;
-    esac
-    
-    if [ -n "$strip_cmd" ] && command -v "$strip_cmd" &> /dev/null; then
-        available_tools="strip:$strip_cmd "
-        log_info "Available Android tools: $available_tools"
-    else
-        log_warning "Android strip tool not found, skipping compression"
-    fi
-    
-    # 查找所有 .so 和 .a 文件
-    local lib_files
-    lib_files=$(find "$output_dir" -type f \( -name "*.so*" -o -name "*.a" \) 2>/dev/null || true)
-    
-    if [ -z "$lib_files" ]; then
-        log_warning "No library files found to compress in $output_dir"
-        return 0
-    fi
-    
-    local compressed_count=0
-    local total_original_size=0
-    local total_compressed_size=0
-    
-    while IFS= read -r lib_file; do
-        [ -z "$lib_file" ] && continue
-        
-        local original_size
-        original_size=$(stat -c%s "$lib_file" 2>/dev/null || echo "0")
-        total_original_size=$((total_original_size + original_size))
-        
-        local final_size=$original_size
-        local compression_applied=false
-        
-        log_info "  Processing: $(basename "$lib_file") (${original_size} bytes)"
-        
-        # 使用Android NDK的strip工具
-        if [ -n "$strip_cmd" ]; then
-            local backup_file="${lib_file}.backup"
-            cp "$lib_file" "$backup_file"
-            
-            log_info "    Using Android strip tool..."
-            
-            if [[ "$lib_file" == *.so* ]]; then
-                "$strip_cmd" --strip-unneeded "$lib_file" 2>/dev/null || true
-            else
-                "$strip_cmd" --strip-debug "$lib_file" 2>/dev/null || true
-            fi
-            
-            local stripped_size
-            stripped_size=$(stat -c%s "$lib_file" 2>/dev/null || echo "$original_size")
-            
-            if [ "$stripped_size" -lt "$original_size" ]; then
-                final_size=$stripped_size
-                compression_applied=true
-                rm -f "$backup_file"
-                local strip_reduction
-                strip_reduction=$(( (original_size - stripped_size) * 100 / original_size ))
-                log_success "      Stripped ${strip_reduction}% of symbols"
-            else
-                mv "$backup_file" "$lib_file"
-                log_info "      Strip had no effect"
-            fi
-        fi
-        
-        total_compressed_size=$((total_compressed_size + final_size))
-        
-        if [ "$compression_applied" = "true" ]; then
-            compressed_count=$((compressed_count + 1))
-            local total_reduction
-            total_reduction=$(( (original_size - final_size) * 100 / original_size ))
-            log_success "    Final: $original_size → $final_size bytes (-${total_reduction}%)"
-        else
-            log_info "    No compression applied"
-        fi
-        
-    done <<< "$lib_files"
-    
-    # 显示压缩统计
-    if [ "$compressed_count" -gt 0 ]; then
-        local total_reduction
-        total_reduction=$(( (total_original_size - total_compressed_size) * 100 / total_original_size ))
-        log_success "Android compression summary for $target_name:"
-        log_success "  Files processed: $(echo "$lib_files" | wc -l)"
-        log_success "  Files optimized: $compressed_count"
-        log_success "  Total size: $total_original_size → $total_compressed_size bytes (-${total_reduction}%)"
-    else
-        log_info "No significant compression achieved for $target_name"
-    fi
-}
-
-# 编译函数
-build_target() {
-    local target_name="$1"
-    local toolchain_file="$2"
-    local output_dir="$3"
-    
-    log_info "Building $target_name..."
-    
-    # 提取交叉编译前缀
-    local cross_prefix
-    cross_prefix=$(get_cross_compile_prefix "$toolchain_file")
-    
-    # 检查交叉编译工具
+    # 检查压缩工具
     local available_tools
-    available_tools=$(check_cross_compile_tools "$cross_prefix" "$target_name")
+    available_tools=$(check_compression_tools "" "$target_name" "true")
     
-    # 创建输出目录
-    mkdir -p "$output_dir"
-    
-    # 创建构建目录
-    local build_dir="${LIBRGA_SOURCE_DIR}/build_${target_name}"
-    mkdir -p "$build_dir"
-    
-    # 进入构建目录
-    cd "$build_dir"
-    
-    # 配置CMake
-    cmake -DCMAKE_TOOLCHAIN_FILE="$toolchain_file" \
-          -DCMAKE_BUILD_TYPE=Release \
-          -DCMAKE_INSTALL_PREFIX="$output_dir" \
-          -DCMAKE_BUILD_TARGET=cmake_linux \
-          -DRGA_SAMPLES_ENABLE=false \
-          ..
-    
-    if [ $? -ne 0 ]; then
-        log_error "CMake configuration failed for $target_name"
-        return 1
-    fi
-    
-    # 编译
-    make -j$(nproc)
-    
-    if [ $? -ne 0 ]; then
-        log_error "Build failed for $target_name"
-        return 1
-    fi
-    
-    # 安装
-    make install
-    
-    if [ $? -ne 0 ]; then
-        log_error "Install failed for $target_name"
-        return 1
-    fi
-    
-    log_success "$target_name build completed successfully"
-    
-    # 压缩库文件
-    compress_libraries "$output_dir" "$target_name" "$available_tools"
+    # 使用统一的压缩函数
+    compress_libraries_unified "$output_dir" "$target_name" "$available_tools" "true"
     
     # 返回到工作目录
     cd "$WORKSPACE_DIR"
 }
 
-# 压缩库文件
-compress_libraries() {
+# 统一的库文件压缩函数
+compress_libraries_unified() {
     local output_dir="$1"
     local target_name="$2"
     local available_tools="$3"
+    local is_android="${4:-false}"
     
     log_info "Compressing libraries for $target_name..."
     
@@ -447,16 +303,12 @@ compress_libraries() {
     local strip_cmd=""
     local objcopy_cmd=""
     local upx_cmd=""
-    local xz_cmd=""
-    local gzip_cmd=""
     
     if [ -n "$available_tools" ]; then
         # 从工具列表中提取各类工具
         strip_cmd=$(echo "$available_tools" | grep -o "strip:[^ ]*" | cut -d: -f2)
         objcopy_cmd=$(echo "$available_tools" | grep -o "objcopy:[^ ]*" | cut -d: -f2)
         upx_cmd=$(echo "$available_tools" | grep -o "upx:[^ ]*" | cut -d: -f2)
-        xz_cmd=$(echo "$available_tools" | grep -o "xz:[^ ]*" | cut -d: -f2)
-        gzip_cmd=$(echo "$available_tools" | grep -o "gzip:[^ ]*" | cut -d: -f2)
     fi
     
     # 显示可用的工具
@@ -464,8 +316,6 @@ compress_libraries() {
     [ -n "$strip_cmd" ] && log_info "  Strip: $strip_cmd"
     [ -n "$objcopy_cmd" ] && log_info "  Objcopy: $objcopy_cmd"
     [ -n "$upx_cmd" ] && log_info "  UPX: $upx_cmd"
-    [ -n "$xz_cmd" ] && log_info "  XZ: $xz_cmd"
-    [ -n "$gzip_cmd" ] && log_info "  GZIP: $gzip_cmd"
     
     # 查找所有 .so 和 .a 文件
     local lib_files
@@ -520,7 +370,7 @@ compress_libraries() {
                 rm -f "$backup_file"
                 local strip_reduction
                 strip_reduction=$(( (original_size - stripped_size) * 100 / original_size ))
-                log_success "      Stripped ${strip_reduction}% of symbols ($strip_cmd)"
+                log_success "      Stripped ${strip_reduction}% of symbols"
             else
                 # 如果 strip 没有效果，恢复原文件
                 mv "$backup_file" "$lib_file"
@@ -530,10 +380,10 @@ compress_libraries() {
             log_info "    Strip tool not available for this target"
         fi
         
-        # 2. 对于动态库，尝试 UPX 压缩
-        if [[ "$lib_file" == *.so* ]] && [ -n "$upx_cmd" ]; then
+        # 2. 对于动态库，尝试 UPX 压缩（仅限非Android目标）
+        if [[ "$lib_file" == *.so* ]] && [ -n "$upx_cmd" ] && [ "$is_android" = "false" ]; then
             local compressed_file="${lib_file}.upx"
-            log_info "    Trying UPX compression with $upx_cmd..."
+            log_info "    Trying UPX compression..."
             
             # 尝试不同的 UPX 压缩级别
             if "$upx_cmd" --best --lzma -o "$compressed_file" "$lib_file" &>/dev/null; then
@@ -556,13 +406,13 @@ compress_libraries() {
                 rm -f "$compressed_file"
                 log_info "      UPX compression failed"
             fi
-        elif [[ "$lib_file" == *.so* ]]; then
-            log_info "    UPX not available for this target"
+        elif [[ "$lib_file" == *.so* ]] && [ "$is_android" = "true" ]; then
+            log_info "    UPX not available for Android targets"
         fi
         
         # 3. 尝试使用 objcopy 进一步优化（如果可用）
         if [ -n "$objcopy_cmd" ] && [ "$compression_applied" = "true" ]; then
-            log_info "    Optimizing with $objcopy_cmd..."
+            log_info "    Optimizing with objcopy..."
             if "$objcopy_cmd" --remove-section=.comment --remove-section=.note "$lib_file" 2>/dev/null; then
                 local objcopy_size
                 objcopy_size=$(stat -c%s "$lib_file" 2>/dev/null || echo "$final_size")
@@ -585,8 +435,6 @@ compress_libraries() {
             log_info "    No compression applied"
         fi
         
-        echo ""
-        
     done <<< "$lib_files"
     
     # 显示压缩统计
@@ -598,20 +446,75 @@ compress_libraries() {
         log_success "  Files optimized: $compressed_count"
         log_success "  Total size: $total_original_size → $total_compressed_size bytes (-${total_reduction}%)"
     else
-        log_info "No significant compression achieved for $target_name (files may already be optimized)"
+        log_info "No significant compression achieved for $target_name"
+    fi
+}
+
+# 编译函数
+build_target() {
+    local target_name="$1"
+    local toolchain_file="$2"
+    local output_dir="$3"
+    
+    log_info "Building $target_name..."
+    
+    # 提取交叉编译前缀
+    local cross_prefix
+    cross_prefix=$(get_cross_compile_prefix "$toolchain_file")
+    
+    # 检查压缩工具
+    local available_tools
+    available_tools=$(check_compression_tools "$cross_prefix" "$target_name" "false")
+    
+    # 创建输出目录
+    mkdir -p "$output_dir"
+    
+    # 创建构建目录
+    local build_dir="${LIBRGA_SOURCE_DIR}/build_${target_name}"
+    mkdir -p "$build_dir"
+    
+    # 进入构建目录
+    cd "$build_dir"
+    
+    # 配置CMake
+    cmake -DCMAKE_TOOLCHAIN_FILE="$toolchain_file" \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_INSTALL_PREFIX="$output_dir" \
+          -DCMAKE_BUILD_TARGET=cmake_linux \
+          -DRGA_SAMPLES_ENABLE=false \
+          ..
+    
+    if [ $? -ne 0 ]; then
+        log_error "CMake configuration failed for $target_name"
+        return 1
     fi
     
-    # 显示每个文件的详细信息
-    log_info "Final library file sizes:"
-    while IFS= read -r lib_file; do
-        [ -z "$lib_file" ] && continue
-        local size
-        size=$(stat -c%s "$lib_file" 2>/dev/null || echo "0")
-        local size_kb
-        size_kb=$((size / 1024))
-        log_info "  $(basename "$lib_file"): ${size_kb} KB"
-    done <<< "$lib_files"
+    # 编译
+    make -j$(nproc)
+    
+    if [ $? -ne 0 ]; then
+        log_error "Build failed for $target_name"
+        return 1
+    fi
+    
+    # 安装
+    make install
+    
+    if [ $? -ne 0 ]; then
+        log_error "Install failed for $target_name"
+        return 1
+    fi
+    
+    log_success "$target_name build completed successfully"
+    
+    # 使用统一的压缩函数
+    compress_libraries_unified "$output_dir" "$target_name" "$available_tools" "false"
+    
+    # 返回到工作目录
+    cd "$WORKSPACE_DIR"
 }
+
+
 
 
 

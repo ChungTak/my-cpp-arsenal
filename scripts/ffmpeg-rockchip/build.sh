@@ -383,47 +383,9 @@ setup_arch_and_os() {
     echo "$arch:$target_os"
 }
 
-# Android构建函数
-build_android_target() {
-    local target_name="$1"
-    local output_dir="$2"
-    
-    log_info "Building Android target: $target_name..."
-    
-    # 初始化Android环境
-    init_android_env "$target_name"
-    
-    # 设置依赖环境变量
-    if ! setup_dependency_env "$target_name"; then
-        return 1
-    fi
-    
-    # 创建输出目录
-    mkdir -p "$output_dir"
-    
-    # 创建构建目录
-    local build_dir="${FFMPEG_SOURCE_DIR}/build_${target_name}"
-    rm -rf "$build_dir"
-    mkdir -p "$build_dir"
-    
-    # 进入源码目录
-    cd "${FFMPEG_SOURCE_DIR}"
-    
-    # 设置架构和目标操作系统
-    local arch_and_os
-    arch_and_os=$(setup_arch_and_os "$target_name")
-    local ARCH
-    local TARGET_OS
-    IFS=':' read -r ARCH TARGET_OS <<< "$arch_and_os"
-    
-    # 设置Android特定的编译器
-    local CC="${TOOLCHAIN}/bin/${ANDROID_TARGET}${API_LEVEL}-clang"
-    local CXX="${TOOLCHAIN}/bin/${ANDROID_TARGET}${API_LEVEL}-clang++"
-    local AR="${TOOLCHAIN}/bin/llvm-ar"
-    local RANLIB="${TOOLCHAIN}/bin/llvm-ranlib"
-    
-    # RK-only options for minimal RockChip-specific build
-    local RK_ONLY_OPTIONS="--disable-everything \
+# 获取RockChip特定的配置选项
+get_rk_only_options() {
+    echo "--disable-everything \
         --disable-x86asm \
         --disable-programs \
         --disable-doc \
@@ -488,9 +450,71 @@ build_android_target() {
         --enable-filter=scale_rkrga \
         --enable-filter=overlay_rkrga \
         --enable-filter=vpp_rkrga"
+}
+
+# Android构建函数
+build_android_target() {
+    local target_name="$1"
+    local output_dir="$2"
     
-    # 完整的配置选项
+    log_info "Building Android target: $target_name..."
+    
+    # 初始化Android环境
+    init_android_env "$target_name"
+    
+    # 设置依赖环境变量
+    if ! setup_dependency_env "$target_name"; then
+        return 1
+    fi
+    
+    # 设置架构和目标操作系统
+    local arch_and_os
+    arch_and_os=$(setup_arch_and_os "$target_name")
+    local ARCH
+    local TARGET_OS
+    IFS=':' read -r ARCH TARGET_OS <<< "$arch_and_os"
+    
+    # 设置Android特定的编译器
+    local CC="${TOOLCHAIN}/bin/${ANDROID_TARGET}${API_LEVEL}-clang"
+    local CXX="${TOOLCHAIN}/bin/${ANDROID_TARGET}${API_LEVEL}-clang++"
+    local AR="${TOOLCHAIN}/bin/llvm-ar"
+    local RANLIB="${TOOLCHAIN}/bin/llvm-ranlib"
+    
+    # 使用统一的构建执行函数
+    if execute_build_process "$target_name" "$output_dir" "$ARCH" "$TARGET_OS" "$CC" "$CXX" "$AR" "$RANLIB" "" "$CFLAGS" "$LDFLAGS"; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# 执行构建流程（配置、编译、安装）
+execute_build_process() {
+    local target_name="$1"
+    local output_dir="$2"
+    local ARCH="$3"
+    local TARGET_OS="$4"
+    local CC="$5"
+    local CXX="$6"
+    local AR="$7"
+    local RANLIB="$8"
+    local cross_prefix="$9"
+    local CFLAGS="${10}"
+    local LDFLAGS="${11}"
+    
+    # 创建输出目录
+    mkdir -p "$output_dir"
+    
+    # 进入源码目录
+    cd "${FFMPEG_SOURCE_DIR}"
+    
+    # 构建配置命令
     local CONFIGURE_CMD="./configure"
+    
+    if [ -n "$cross_prefix" ]; then
+        CONFIGURE_CMD="$CONFIGURE_CMD --cross-prefix='$cross_prefix'"
+    fi
+    
     CONFIGURE_CMD="$CONFIGURE_CMD --arch=$ARCH"
     CONFIGURE_CMD="$CONFIGURE_CMD --target-os=$TARGET_OS"
     CONFIGURE_CMD="$CONFIGURE_CMD --enable-cross-compile"
@@ -502,17 +526,21 @@ build_android_target() {
     CONFIGURE_CMD="$CONFIGURE_CMD --pkg-config=pkg-config"
     CONFIGURE_CMD="$CONFIGURE_CMD --extra-cflags='$CFLAGS'"
     CONFIGURE_CMD="$CONFIGURE_CMD --extra-ldflags='$LDFLAGS'"
+    
+    # 添加RockChip配置选项
+    local RK_ONLY_OPTIONS
+    RK_ONLY_OPTIONS=$(get_rk_only_options)
     CONFIGURE_CMD="$CONFIGURE_CMD $RK_ONLY_OPTIONS"
     
     # 配置
-    log_info "Configuring FFmpeg for Android target: $target_name..."
+    log_info "Configuring FFmpeg for $target_name..."
     log_info "Configure command: $CONFIGURE_CMD"
     
     # 执行配置命令
     eval "$CONFIGURE_CMD"
     
     if [ $? -ne 0 ]; then
-        log_error "Configure failed for Android target: $target_name"
+        log_error "Configure failed for $target_name"
         return 1
     fi
     
@@ -520,27 +548,29 @@ build_android_target() {
     make clean
     
     # 编译
-    log_info "Compiling FFmpeg for Android target: $target_name..."
+    log_info "Compiling FFmpeg for $target_name..."
     make -j$(nproc)
     
     if [ $? -ne 0 ]; then
-        log_error "Build failed for Android target: $target_name"
+        log_error "Build failed for $target_name"
         return 1
     fi
     
     # 安装
-    log_info "Installing FFmpeg for Android target: $target_name..."
+    log_info "Installing FFmpeg for $target_name..."
     make install
     
     if [ $? -ne 0 ]; then
-        log_error "Install failed for Android target: $target_name"
+        log_error "Install failed for $target_name"
         return 1
     fi
     
-    log_success "Android target $target_name build completed successfully"
+    log_success "Target $target_name build completed successfully"
     
     # 返回到工作目录
     cd "$WORKSPACE_DIR"
+    
+    return 0
 }
 
 # 构建单个目标
@@ -593,134 +623,12 @@ build_target() {
         RANLIB="ranlib"
     fi
     
-    # 创建构建目录
-    local build_dir="${FFMPEG_SOURCE_DIR}/build_${target_name}"
-    rm -rf "$build_dir"
-    mkdir -p "$build_dir"
-    
-    # 进入源码目录
-    cd "${FFMPEG_SOURCE_DIR}"
-    
-    # RK-only options for minimal RockChip-specific build
-    local RK_ONLY_OPTIONS="--disable-everything \
-        --disable-x86asm \
-        --disable-programs \
-        --disable-doc \
-        --disable-swscale \
-        --disable-swresample \
-        --disable-postproc \
-        --disable-network \
-        --disable-static \
-        --disable-stripping \
-        --enable-shared \
-        --enable-version3 \
-        --enable-ffmpeg \
-        --enable-libdrm \
-        --enable-rkrga \
-        --enable-rkmpp \
-        \
-        --enable-protocol=file \
-        \
-        --enable-muxer=mp4 \
-        --enable-muxer=avi \
-        --enable-muxer=null \
-        --enable-demuxer=mov \
-        --enable-demuxer=matroska \
-        --enable-demuxer=avi \
-        \
-        --enable-encoder=wrapped_avframe \
-        --enable-encoder=rawvideo \
-        --enable-encoder=h264_rkmpp \
-        --enable-encoder=hevc_rkmpp \
-        --enable-encoder=mjpeg_rkmpp \
-        \
-        --enable-decoder=wrapped_avframe \
-        --enable-decoder=rawvideo \
-        --enable-decoder=h264_rkmpp \
-        --enable-decoder=av1_rkmpp \
-        --enable-decoder=mjpeg_rkmpp \
-        --enable-decoder=hevc_rkmpp \
-        --enable-decoder=vp8_rkmpp \
-        --enable-decoder=vp9_rkmpp \
-        --enable-decoder=h263_rkmpp \
-        --enable-decoder=mpeg1_rkmpp \
-        --enable-decoder=mpeg2_rkmpp \
-        --enable-decoder=mpeg4_rkmpp \
-        \
-        --enable-parser=h264 \
-        --enable-parser=hevc \
-        --enable-parser=mjpeg \
-        --enable-parser=av1 \
-        --enable-parser=vp8 \
-        --enable-parser=vp9 \
-        --enable-parser=h263 \
-        --enable-parser=mpegvideo \
-        --enable-parser=mpeg4video \
-        \
-        --enable-avfilter \
-        --enable-indev=lavfi \
-        --enable-filter=testsrc \
-        --enable-filter=testsrc2 \
-        --enable-filter=format \
-        --enable-filter=hwupload \
-        --enable-filter=hwdownload \
-        --enable-filter=scale_rkrga \
-        --enable-filter=overlay_rkrga \
-        --enable-filter=vpp_rkrga"
-    
-    # 完整的配置选项
-    local CONFIGURE_CMD="./configure"
-    CONFIGURE_CMD="$CONFIGURE_CMD --cross-prefix='$cross_prefix'"
-    CONFIGURE_CMD="$CONFIGURE_CMD --arch=$ARCH"
-    CONFIGURE_CMD="$CONFIGURE_CMD --target-os=$TARGET_OS"
-    CONFIGURE_CMD="$CONFIGURE_CMD --enable-cross-compile"
-    CONFIGURE_CMD="$CONFIGURE_CMD --prefix=$output_dir"
-    CONFIGURE_CMD="$CONFIGURE_CMD --cc='$CC'"
-    CONFIGURE_CMD="$CONFIGURE_CMD --cxx='$CXX'"
-    CONFIGURE_CMD="$CONFIGURE_CMD --ar='$AR'"
-    CONFIGURE_CMD="$CONFIGURE_CMD --ranlib='$RANLIB'"
-    CONFIGURE_CMD="$CONFIGURE_CMD --pkg-config=pkg-config"
-    CONFIGURE_CMD="$CONFIGURE_CMD --extra-cflags='$CFLAGS'"
-    CONFIGURE_CMD="$CONFIGURE_CMD --extra-ldflags='$LDFLAGS'"
-    CONFIGURE_CMD="$CONFIGURE_CMD $RK_ONLY_OPTIONS"
-    
-    # 配置
-    log_info "Configuring FFmpeg for $target_name..."
-    log_info "Configure command: $CONFIGURE_CMD"
-    
-    # 执行配置命令
-    eval "$CONFIGURE_CMD"
-    
-    if [ $? -ne 0 ]; then
-        log_error "Configure failed for $target_name"
+    # 使用统一的构建执行函数
+    if execute_build_process "$target_name" "$output_dir" "$ARCH" "$TARGET_OS" "$CC" "$CXX" "$AR" "$RANLIB" "$cross_prefix" "$CFLAGS" "$LDFLAGS"; then
+        return 0
+    else
         return 1
     fi
-    
-    # 清理之前的构建
-    make clean
-    
-    # 编译
-    log_info "Compiling FFmpeg for $target_name..."
-    make -j$(nproc)
-    
-    if [ $? -ne 0 ]; then
-        log_error "Build failed for $target_name"
-        return 1
-    fi
-    
-    # 安装
-    log_info "Installing FFmpeg for $target_name..."
-    make install
-    
-    if [ $? -ne 0 ]; then
-        log_error "Install failed for $target_name"
-        return 1
-    fi
-    
-    log_success "$target_name build completed successfully"
-    
-    # 返回到工作目录
-    cd "$WORKSPACE_DIR"
 }
 
 # 获取默认构建目标

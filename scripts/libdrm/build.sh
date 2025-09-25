@@ -615,10 +615,33 @@ build_android_target() {
     local meson_options
     meson_options=$(get_meson_options "${ANDROID_TARGET}-android" false)
     
+    # 使用统一的构建执行函数
+    if execute_libdrm_build "$target_name" "$output_dir" "$build_dir" "$CROSS_FILE" "$meson_options" "true"; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# 统一的构建执行函数
+execute_libdrm_build() {
+    local target_name="$1"
+    local output_dir="$2"
+    local build_dir="$3"
+    local cross_file="$4"
+    local meson_options="$5"
+    local is_android="$6"
+    
+    log_info "Executing libdrm build for $target_name..."
+    
     # 配置Meson
     local MESON_CMD="meson setup $build_dir $LIBDRM_SOURCE_DIR -Dprefix=$output_dir -Dbuildtype=release -Dlibdir=lib"
-    MESON_CMD="$MESON_CMD --cross-file=$CROSS_FILE"
-    MESON_CMD="$MESON_CMD $meson_options"
+    if [ -n "$cross_file" ]; then
+        MESON_CMD="$MESON_CMD --cross-file=$cross_file"
+    fi
+    if [ -n "$meson_options" ]; then
+        MESON_CMD="$MESON_CMD $meson_options"
+    fi
     
     log_info "Meson command: $MESON_CMD"
     eval "$MESON_CMD"
@@ -646,14 +669,20 @@ build_android_target() {
     
     log_success "$target_name build completed successfully"
     
-    # Android版本的压缩处理
-    compress_android_libraries "$output_dir" "$target_name"
+    # 压缩库文件
+    if [ "$is_android" = "true" ]; then
+        compress_android_libraries "$output_dir" "$target_name"
+    else
+        compress_libraries "$output_dir" "$target_name" ""
+    fi
     
     # 验证构建架构
     validate_build_architecture "$output_dir" "$target_name"
     
     # 返回到工作目录
     cd "$WORKSPACE_DIR"
+    
+    return 0
 }
 
 # 编译函数
@@ -709,40 +738,8 @@ build_target() {
     # Always add meson options
     MESON_CMD="$MESON_CMD $meson_options"
     
-    log_info "Meson command: $MESON_CMD"
-    eval "$MESON_CMD"
-    
-    if [ $? -ne 0 ]; then
-        log_error "Meson configuration failed for $target_name"
-        return 1
-    fi
-    
-    # 编译
-    ninja -C "$build_dir"
-    
-    if [ $? -ne 0 ]; then
-        log_error "Build failed for $target_name"
-        return 1
-    fi
-    
-    # 安装
-    ninja -C "$build_dir" install
-    
-    if [ $? -ne 0 ]; then
-        log_error "Install failed for $target_name"
-        return 1
-    fi
-    
-    log_success "$target_name build completed successfully"
-    
-    # 压缩库文件
-    compress_libraries "$output_dir" "$target_name" "$available_tools"
-    
-    # 验证构建架构
-    validate_build_architecture "$output_dir" "$target_name"    
-
-    # 返回到工作目录
-    cd "$WORKSPACE_DIR"
+    # 使用统一的构建执行函数
+    execute_libdrm_build "$target_name" "$output_dir" "$build_dir" "" "" "false"
 }
 
 # 压缩库文件

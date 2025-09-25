@@ -30,12 +30,19 @@ log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # 检查工具
 check_tools() {
-    for tool in meson ninja git; do
+    local required_tools=("meson" "ninja" "git")
+    local missing_tools=()
+    
+    for tool in "${required_tools[@]}"; do
         if ! command -v "$tool" &> /dev/null; then
-            log_error "Missing required tool: $tool"
-            exit 1
+            missing_tools+=("$tool")
         fi
     done
+    
+    if [ ${#missing_tools[@]} -gt 0 ]; then
+        log_error "Missing required tools: ${missing_tools[*]}"
+        exit 1
+    fi
 }
 
 # 克隆源码
@@ -61,98 +68,61 @@ clone_librga() {
     fi
 }
 
+# 应用 meson 时钟偏差补丁
+apply_meson_clockskew_patch() {
+    log_info "Applying meson clockskew patch..."
+    
+    local patch_script="${WORKSPACE_DIR}/patches/patch_meson_clockskew.py"
+    
+    if [ ! -f "$patch_script" ]; then
+        log_warning "Meson clockskew patch script not found: $patch_script"
+        log_warning "Compilation may fail due to clock skew issues"
+        return 0
+    fi
+    
+    # 运行补丁脚本
+    if python3 "$patch_script"; then
+        log_success "Meson clockskew patch applied successfully"
+    else
+        log_warning "Failed to apply meson clockskew patch"
+        log_warning "Compilation may fail due to clock skew issues"
+    fi
+}
+
+
+# 目标配置映射
+declare -A TARGET_CONFIGS=(
+    ["arm-linux-gnueabihf"]="arm-linux-gnueabihf:${RKRGA_OUTPUT_DIR}/arm-linux-gnueabihf:${OUTPUTS_DIR}/libdrm/arm-linux-gnueabihf:arm-linux-gnueabihf:ARM"
+    ["aarch64-linux-gnu"]="aarch64-linux-gnu:${RKRGA_OUTPUT_DIR}/aarch64-linux-gnu:${OUTPUTS_DIR}/libdrm/aarch64-linux-gnu:aarch64-linux-gnu:AArch64"
+    ["arm-linux-musleabihf"]="arm-linux-musleabihf:${RKRGA_OUTPUT_DIR}/arm-linux-musleabihf:${OUTPUTS_DIR}/libdrm/arm-linux-musleabihf:arm-linux-musleabihf:ARM"
+    ["aarch64-linux-musl"]="aarch64-linux-musl:${RKRGA_OUTPUT_DIR}/aarch64-linux-musl:${OUTPUTS_DIR}/libdrm/aarch64-linux-musl:aarch64-linux-musl:AArch64"
+    ["riscv64-linux-gnu"]="riscv64-linux-gnu:${RKRGA_OUTPUT_DIR}/riscv64-linux-gnu:${OUTPUTS_DIR}/libdrm/riscv64-linux-gnu:riscv64-linux-gnu:RISC-V"
+    ["riscv64-linux-musl"]="riscv64-linux-musl:${RKRGA_OUTPUT_DIR}/riscv64-linux-musl:${OUTPUTS_DIR}/libdrm/riscv64-linux-musl:riscv64-linux-musl:RISC-V"
+    ["aarch64-linux-android"]="aarch64-linux-android:${RKRGA_OUTPUT_DIR}/aarch64-linux-android:${OUTPUTS_DIR}/libdrm/aarch64-linux-android:aarch64-linux-android:AArch64"
+    ["arm-linux-android"]="arm-linux-android:${RKRGA_OUTPUT_DIR}/arm-linux-android:${OUTPUTS_DIR}/libdrm/arm-linux-android:arm-linux-android:ARM"
+    ["x86_64-linux-gnu"]="x86_64-linux-gnu:${RKRGA_OUTPUT_DIR}/x86_64-linux-gnu:${OUTPUTS_DIR}/libdrm/x86_64-linux-gnu:x86_64-linux-gnu:x86_64"
+    ["x86_64-windows-gnu"]="x86_64-windows-gnu:${RKRGA_OUTPUT_DIR}/x86_64-windows-gnu:${OUTPUTS_DIR}/libdrm/x86_64-windows-gnu:x86_64-windows-gnu:x86_64"
+    ["x86_64-macos"]="x86_64-macos:${RKRGA_OUTPUT_DIR}/x86_64-macos:${OUTPUTS_DIR}/libdrm/x86_64-macos:x86_64-macos:x86_64"
+    ["aarch64-macos"]="aarch64-macos:${RKRGA_OUTPUT_DIR}/aarch64-macos:${OUTPUTS_DIR}/libdrm/aarch64-macos:aarch64-macos:AArch64"
+)
+
 # 获取目标配置
 get_target_config() {
     local target="$1"
-    case "$target" in
-        "arm-linux-gnueabihf")
-            echo "arm-linux-gnueabihf:${RKRGA_OUTPUT_DIR}/arm-linux-gnueabihf"
-            ;;
-        "aarch64-linux-gnu")
-            echo "aarch64-linux-gnu:${RKRGA_OUTPUT_DIR}/aarch64-linux-gnu"
-            ;;
-        "arm-linux-musleabihf")
-            echo "arm-linux-musleabihf:${RKRGA_OUTPUT_DIR}/arm-linux-musleabihf"
-            ;;
-        "aarch64-linux-musl")
-            echo "aarch64-linux-musl:${RKRGA_OUTPUT_DIR}/aarch64-linux-musl"
-            ;;
-        "riscv64-linux-gnu")
-            echo "riscv64-linux-gnu:${RKRGA_OUTPUT_DIR}/riscv64-linux-gnu"
-            ;;
-        "riscv64-linux-musl")
-            echo "riscv64-linux-musl:${RKRGA_OUTPUT_DIR}/riscv64-linux-musl"
-            ;;
-        "aarch64-linux-android")
-            echo "aarch64-linux-android:${RKRGA_OUTPUT_DIR}/aarch64-linux-android"
-            ;;
-        "arm-linux-android")
-            echo "arm-linux-android:${RKRGA_OUTPUT_DIR}/arm-linux-android"
-            ;;
-        "x86_64-linux-gnu")
-            echo "x86_64-linux-gnu:${RKRGA_OUTPUT_DIR}/x86_64-linux-gnu"
-            ;;
-        "x86_64-windows-gnu")
-            echo "x86_64-windows-gnu:${RKRGA_OUTPUT_DIR}/x86_64-windows-gnu"
-            ;;
-        "x86_64-macos")
-            echo "x86_64-macos:${RKRGA_OUTPUT_DIR}/x86_64-macos"
-            ;;
-        "aarch64-macos")
-            echo "aarch64-macos:${RKRGA_OUTPUT_DIR}/aarch64-macos"
-            ;;
-        *)
-            echo ""
-            ;;
-    esac
+    echo "${TARGET_CONFIGS[$target]:-}"
 }
 
 # 设置 libdrm 依赖
 setup_libdrm_dependency() {
     local target="$1"
-    local libdrm_dir=""
+    local config="${TARGET_CONFIGS[$target]:-}"
     
-    case "$target" in
-        "arm-linux-gnueabihf")
-            libdrm_dir="${OUTPUTS_DIR}/libdrm/arm-linux-gnueabihf"
-            ;;
-        "aarch64-linux-gnu")
-            libdrm_dir="${OUTPUTS_DIR}/libdrm/aarch64-linux-gnu"
-            ;;
-        "arm-linux-musleabihf")
-            libdrm_dir="${OUTPUTS_DIR}/libdrm/arm-linux-musleabihf"
-            ;;
-        "aarch64-linux-musl")
-            libdrm_dir="${OUTPUTS_DIR}/libdrm/aarch64-linux-musl"
-            ;;
-        "riscv64-linux-gnu")
-            libdrm_dir="${OUTPUTS_DIR}/libdrm/riscv64-linux-gnu"
-            ;;
-        "riscv64-linux-musl")
-            libdrm_dir="${OUTPUTS_DIR}/libdrm/riscv64-linux-musl"
-            ;;
-        "aarch64-linux-android")
-            libdrm_dir="${OUTPUTS_DIR}/libdrm/aarch64-linux-android"
-            ;;
-        "arm-linux-android")
-            libdrm_dir="${OUTPUTS_DIR}/libdrm/arm-linux-android"
-            ;;
-        "x86_64-linux-gnu")
-            libdrm_dir="${OUTPUTS_DIR}/libdrm/x86_64-linux-gnu"
-            ;;
-        "x86_64-windows-gnu")
-            libdrm_dir="${OUTPUTS_DIR}/libdrm/x86_64-windows-gnu"
-            ;;
-        "x86_64-macos")
-            libdrm_dir="${OUTPUTS_DIR}/libdrm/x86_64-macos"
-            ;;
-        "aarch64-macos")
-            libdrm_dir="${OUTPUTS_DIR}/libdrm/aarch64-macos"
-            ;;
-        *)
-            libdrm_dir="${OUTPUTS_DIR}/libdrm"
-            ;;
-    esac
+    if [ -z "$config" ]; then
+        log_error "Invalid target: $target"
+        return 1
+    fi
+    
+    IFS=':' read -r target_name output_dir libdrm_dir cross_prefix expected_arch <<< "$config"
     
     if [ ! -d "$libdrm_dir" ]; then
         log_error "libdrm dependency not found: $libdrm_dir"
@@ -184,166 +154,27 @@ build_target() {
     local meson_options="--buildtype=release --default-library=shared --libdir=lib"
     meson_options+=" -Dcpp_args=-fpermissive -Dlibdrm=true -Dlibrga_demo=false"
     
-    # 获取目标架构
-    local target_arch=""
-    case "$target_name" in
-        "arm-linux-gnueabihf")
-            target_arch="arm-linux-gnueabihf"
-            ;;
-        "aarch64-linux-gnu")
-            target_arch="aarch64-linux-gnu"
-            ;;
-        "arm-linux-musleabihf")
-            target_arch="arm-linux-musleabihf"
-            ;;
-        "aarch64-linux-musl")
-            target_arch="aarch64-linux-musl"
-            ;;
-        "riscv64-linux-gnu")
-            target_arch="riscv64-linux-gnu"
-            ;;
-        "riscv64-linux-musl")
-            target_arch="riscv64-linux-musl"
-            ;;
-        "aarch64-linux-android")
-            target_arch="aarch64-linux-android"
-            ;;
-        "arm-linux-android")
-            target_arch="arm-linux-android"
-            ;;
-        "x86_64-linux-gnu")
-            target_arch="x86_64-linux-gnu"
-            ;;
-        "x86_64-windows-gnu")
-            target_arch="x86_64-windows-gnu"
-            ;;
-        "x86_64-macos")
-            target_arch="x86_64-macos"
-            ;;
-        "aarch64-macos")
-            target_arch="aarch64-macos"
-            ;;
-        *)
-            target_arch="unknown"
-            ;;
-    esac
+    # 获取目标配置
+    local config="${TARGET_CONFIGS[$target_name]:-}"
+    if [ -z "$config" ]; then
+        log_error "Invalid target configuration: $target_name"
+        return 1
+    fi
+    
+    IFS=':' read -r target_name output_dir libdrm_dir cross_prefix expected_arch <<< "$config"
     
     # Android 特殊处理
     if [[ "$target_name" == *"-android" ]]; then
-        local ndk_path="${ANDROID_NDK_HOME:-$HOME/sdk/android_ndk/android-ndk-r25c}"
-        if [ ! -d "$ndk_path" ]; then
-            log_error "Android NDK not found: $ndk_path"
+        if ! setup_android_cross_compile "$target_name"; then
             return 1
         fi
-        
-        local api_level=23
-        local android_target=""
-        local android_abi=""
-        
-        case "$target_name" in
-            "aarch64-linux-android")
-                android_target="aarch64-linux-android"
-                android_abi="arm64-v8a"
-                ;;
-            "arm-linux-android")
-                android_target="armv7a-linux-androideabi"
-                android_abi="armeabi-v7a"
-                ;;
-        esac
-        
-        # 创建 Android 交叉编译文件
-        local cross_file="${SCRIPT_DIR}/android-cross.txt"
-        cat > "$cross_file" << EOF
-[binaries]
-c = '${ndk_path}/toolchains/llvm/prebuilt/linux-x86_64/bin/${android_target}${api_level}-clang'
-cpp = '${ndk_path}/toolchains/llvm/prebuilt/linux-x86_64/bin/${android_target}${api_level}-clang++'
-ar = '${ndk_path}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar'
-strip = '${ndk_path}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip'
-pkgconfig = 'pkg-config'
-
-[host_machine]
-system = 'linux'
-cpu_family = 'arm'
-cpu = 'aarch64'
-endian = 'little'
-
-[built-in options]
-c_std = 'c11'
-cpp_std = 'c++11'
-default_library = 'shared'
-EOF
-        
-        meson_options+=" --cross-file=$cross_file"
-    else
+        meson_options+=" --cross-file=${SCRIPT_DIR}/android-cross.txt"
+    elif [ -n "$cross_prefix" ]; then
         # 非Android目标：使用交叉编译
-        local cross_prefix=""
-        case "$target_name" in
-            "arm-linux-gnueabihf")
-                cross_prefix="arm-linux-gnueabihf-"
-                ;;
-            "aarch64-linux-gnu")
-                cross_prefix="aarch64-linux-gnu-"
-                ;;
-            "riscv64-linux-gnu")
-                cross_prefix="riscv64-linux-gnu-"
-                ;;
-            "riscv64-linux-musl")
-                cross_prefix="riscv64-linux-musl-"
-                ;;
-            "arm-linux-musleabihf")
-                cross_prefix="arm-linux-musleabihf-"
-                ;;
-            "aarch64-linux-musl")
-                cross_prefix="aarch64-linux-musl-"
-                ;;
-            "x86_64-linux-gnu")
-                cross_prefix="x86_64-linux-gnu-"
-                ;;
-            "x86_64-windows-gnu")
-                cross_prefix="x86_64-w64-mingw32-"
-                ;;
-            "x86_64-macos")
-                cross_prefix="x86_64-apple-darwin-"
-                ;;
-            "aarch64-macos")
-                cross_prefix="aarch64-apple-darwin-"
-                ;;
-        esac
-        
-        if [ -n "$cross_prefix" ]; then
-            # 检查交叉编译工具是否可用
-            if command -v "${cross_prefix}gcc" &> /dev/null; then
-                log_info "Using cross compiler: ${cross_prefix}gcc"
-                
-                # 创建交叉编译文件
-                local cross_file="${SCRIPT_DIR}/cross-${target_name}.txt"
-                cat > "$cross_file" << EOF
-[binaries]
-c = ['${cross_prefix}gcc']
-cpp = ['${cross_prefix}g++']
-ar = ['${cross_prefix}ar']
-strip = ['${cross_prefix}strip']
-pkg-config = 'pkg-config'
-
-[host_machine]
-system = 'linux'
-cpu_family = 'arm'
-cpu = 'aarch64'
-endian = 'little'
-
-[built-in options]
-c_std = 'c11'
-cpp_std = 'c++11'
-default_library = 'shared'
-
-[properties]
-needs_exe_wrapper = true
-EOF
-                
-                meson_options+=" --cross-file=$cross_file"
-            else
-                log_warning "Cross compiler ${cross_prefix}gcc not found, using native build"
-            fi
+        if ! setup_cross_compile "$target_name" "$cross_prefix"; then
+            log_warning "Cross compiler ${cross_prefix}gcc not found, using native build"
+        else
+            meson_options+=" --cross-file=${SCRIPT_DIR}/cross-${target_name}.txt"
         fi
     fi
     
@@ -382,6 +213,102 @@ EOF
     
     return 0
 }
+
+# 设置 Android 交叉编译
+setup_android_cross_compile() {
+    local target_name="$1"
+    
+    local ndk_path="${ANDROID_NDK_HOME:-$HOME/sdk/android_ndk/android-ndk-r25c}"
+    if [ ! -d "$ndk_path" ]; then
+        log_error "Android NDK not found: $ndk_path"
+        return 1
+    fi
+    
+    local api_level=23
+    local android_target=""
+    local android_abi=""
+    
+    case "$target_name" in
+        "aarch64-linux-android")
+            android_target="aarch64-linux-android"
+            android_abi="arm64-v8a"
+            ;;
+        "arm-linux-android")
+            android_target="armv7a-linux-androideabi"
+            android_abi="armeabi-v7a"
+            ;;
+        *)
+            log_error "Unsupported Android target: $target_name"
+            return 1
+            ;;
+    esac
+    
+    # 创建 Android 交叉编译文件
+    local cross_file="${SCRIPT_DIR}/android-cross.txt"
+    cat > "$cross_file" << EOF
+[binaries]
+c = '${ndk_path}/toolchains/llvm/prebuilt/linux-x86_64/bin/${android_target}${api_level}-clang'
+cpp = '${ndk_path}/toolchains/llvm/prebuilt/linux-x86_64/bin/${android_target}${api_level}-clang++'
+ar = '${ndk_path}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar'
+strip = '${ndk_path}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip'
+pkgconfig = 'pkg-config'
+
+[host_machine]
+system = 'linux'
+cpu_family = 'arm'
+cpu = 'aarch64'
+endian = 'little'
+
+[built-in options]
+c_std = 'c11'
+cpp_std = 'c++11'
+default_library = 'shared'
+EOF
+    
+    return 0
+}
+
+# 设置交叉编译
+setup_cross_compile() {
+    local target_name="$1"
+    local cross_prefix="$2"
+    
+    # 检查交叉编译工具是否可用
+    if ! command -v "${cross_prefix}gcc" &> /dev/null; then
+        return 1
+    fi
+    
+    log_info "Using cross compiler: ${cross_prefix}gcc"
+    
+    # 创建交叉编译文件
+    local cross_file="${SCRIPT_DIR}/cross-${target_name}.txt"
+    cat > "$cross_file" << EOF
+[binaries]
+c = ['${cross_prefix}gcc']
+cpp = ['${cross_prefix}g++']
+ar = ['${cross_prefix}ar']
+strip = ['${cross_prefix}strip']
+pkg-config = 'pkg-config'
+
+[host_machine]
+system = 'linux'
+cpu_family = 'arm'
+cpu = 'aarch64'
+endian = 'little'
+
+[built-in options]
+c_std = 'c11'
+cpp_std = 'c++11'
+default_library = 'shared'
+
+[properties]
+needs_exe_wrapper = true
+EOF
+    
+    return 0
+}
+
+
 
 # 压缩库文件
 compress_libraries() {
@@ -435,26 +362,6 @@ compress_libraries() {
             fi
         fi
         
-        # 使用 UPX 压缩（仅对共享库）
-        if [[ "$lib_file" == *.so* ]] && command -v "upx" &> /dev/null; then
-            local compressed_file="${lib_file}.upx"
-            
-            if upx --best --lzma -o "$compressed_file" "$lib_file" &>/dev/null; then
-                local upx_size
-                upx_size=$(stat -c%s "$compressed_file" 2>/dev/null || echo "$final_size")
-                
-                if [ "$upx_size" -lt "$final_size" ]; then
-                    mv "$compressed_file" "$lib_file"
-                    final_size=$upx_size
-                    compression_applied=true
-                else
-                    rm -f "$compressed_file"
-                fi
-            else
-                rm -f "$compressed_file"
-            fi
-        fi
-        
         total_compressed_size=$((total_compressed_size + final_size))
         
         if [ "$compression_applied" = "true" ]; then
@@ -482,24 +389,14 @@ validate_build_architecture() {
     
     log_info "Validating build architecture for $target_name..."
     
-    local expected_arch=""
-    case "$target_name" in
-        "arm-linux-gnueabihf"|"arm-linux-musleabihf"|"arm-linux-android")
-            expected_arch="ARM"
-            ;;
-        "aarch64-linux-gnu"|"aarch64-linux-musl"|"aarch64-linux-android"|"aarch64-macos")
-            expected_arch="AArch64"
-            ;;
-        "riscv64-linux-gnu"|"riscv64-linux-musl")
-            expected_arch="RISC-V"
-            ;;
-        "x86_64-linux-gnu"|"x86_64-windows-gnu"|"x86_64-macos")
-            expected_arch="x86_64"
-            ;;
-        *)
-            expected_arch="Unknown"
-            ;;
-    esac
+    # 获取目标配置中的预期架构
+    local config="${TARGET_CONFIGS[$target_name]:-}"
+    if [ -z "$config" ]; then
+        log_warning "Unknown target for validation: $target_name"
+        return 0
+    fi
+    
+    IFS=':' read -r target_name output_dir libdrm_dir cross_prefix expected_arch <<< "$config"
     
     local lib_files
     lib_files=$(find "$output_dir" -type f \( -name "*.so*" -o -name "*.a" \) 2>/dev/null || true)
@@ -510,6 +407,27 @@ validate_build_architecture() {
     fi
     
     local validation_passed=true
+    local arch_patterns=()
+    
+    # 设置架构匹配模式
+    case "$expected_arch" in
+        "ARM")
+            arch_patterns=("ARM" "32-bit" "arm")
+            ;;
+        "AArch64")
+            arch_patterns=("AArch64" "aarch64" "64-bit" "ARM64")
+            ;;
+        "RISC-V")
+            arch_patterns=("RISC-V" "riscv64")
+            ;;
+        "x86_64")
+            arch_patterns=("x86-64" "x86_64" "64-bit")
+            ;;
+        *)
+            log_info "Architecture validation skipped for unknown target: $expected_arch"
+            return 0
+            ;;
+    esac
     
     while IFS= read -r lib_file; do
         [ -z "$lib_file" ] && continue
@@ -517,31 +435,29 @@ validate_build_architecture() {
         local file_info
         file_info=$(file "$lib_file" 2>/dev/null || echo "Unknown file type")
         
-        case "$expected_arch" in
-            "ARM")
-                if echo "$file_info" | grep -q -E "(x86-64|x86_64)"; then
-                    log_warning "Architecture mismatch: Expected ARM, but got x86-64"
-                    validation_passed=false
-                elif echo "$file_info" | grep -q -E "(ARM|32-bit|arm)"; then
-                    log_success "✓ Architecture matches expected ARM"
-                else
-                    log_info "Architecture detection inconclusive for ARM"
-                fi
-                ;;
-            "AArch64")
-                if echo "$file_info" | grep -q -E "(x86-64|x86_64)"; then
-                    log_warning "Architecture mismatch: Expected AArch64, but got x86-64"
-                    validation_passed=false
-                elif echo "$file_info" | grep -q -E "(AArch64|aarch64|64-bit|ARM64)"; then
-                    log_success "✓ Architecture matches expected AArch64"
-                else
-                    log_info "Architecture detection inconclusive for AArch64"
-                fi
-                ;;
-            *)
-                log_info "Architecture validation skipped for unknown target"
-                ;;
-        esac
+        # 检查是否包含错误的架构
+        if echo "$file_info" | grep -q -E "(x86-64|x86_64)"; then
+            if [ "$expected_arch" != "x86_64" ]; then
+                log_warning "Architecture mismatch: Expected $expected_arch, but got x86-64"
+                validation_passed=false
+                continue
+            fi
+        fi
+        
+        # 检查是否匹配预期架构
+        local pattern_matched=false
+        for pattern in "${arch_patterns[@]}"; do
+            if echo "$file_info" | grep -q -E "$pattern"; then
+                pattern_matched=true
+                break
+            fi
+        done
+        
+        if [ "$pattern_matched" = "true" ]; then
+            log_success "✓ Architecture matches expected $expected_arch"
+        else
+            log_warning "Architecture detection inconclusive for $expected_arch"
+        fi
         
     done <<< "$lib_files"
     
@@ -554,6 +470,50 @@ validate_build_architecture() {
     fi
 }
 
+# 构建单个目标
+build_single_target() {
+    local target="$1"
+    local target_config
+    target_config=$(get_target_config "$target")
+    
+    if [ -z "$target_config" ]; then
+        log_error "Invalid target: $target"
+        return 1
+    fi
+    
+    IFS=':' read -r target_name output_dir <<< "$target_config"
+    if build_target "$target_name" "$output_dir"; then
+        log_success "$target build completed"
+        return 0
+    else
+        log_error "$target build failed"
+        return 1
+    fi
+}
+
+# 构建多个目标
+build_multiple_targets() {
+    local targets=("$@")
+    local success_count=0
+    local failure_count=0
+    
+    for target in "${targets[@]}"; do
+        if build_single_target "$target"; then
+            success_count=$((success_count + 1))
+        else
+            failure_count=$((failure_count + 1))
+        fi
+    done
+    
+    log_info "Build summary: $success_count successful, $failure_count failed"
+    
+    if [ $failure_count -gt 0 ]; then
+        log_warning "Some builds failed, but continuing..."
+    fi
+    
+    return $((failure_count > 0 ? 1 : 0))
+}
+
 # 主函数
 main() {
     local target="${1:-}"
@@ -561,19 +521,11 @@ main() {
     check_tools
     clone_librga
     mkdir -p "$RKRGA_OUTPUT_DIR"
-    
+    apply_meson_clockskew_patch    
+
     if [ -n "$target" ]; then
         # 构建单个目标
-        local target_config
-        target_config=$(get_target_config "$target")
-        if [ -z "$target_config" ]; then
-            log_error "Invalid target: $target"
-            show_help
-            exit 1
-        fi
-        
-        IFS=':' read -r target_name output_dir <<< "$target_config"
-        if build_target "$target_name" "$output_dir"; then
+        if build_single_target "$target"; then
             log_success "Build completed successfully"
         else
             log_error "Build failed"
@@ -581,21 +533,8 @@ main() {
         fi
     else
         # 构建默认目标
-        # 将_DEFAULT_BUILD_TARGETS字符串转换为数组
         IFS=',' read -r -a default_targets <<< "$_DEFAULT_BUILD_TARGETS"
-        for target in "${default_targets[@]}"; do
-            local target_config
-            target_config=$(get_target_config "$target")
-            if [ -n "$target_config" ]; then
-                IFS=':' read -r target_name output_dir <<< "$target_config"
-                if build_target "$target_name" "$output_dir"; then
-                    log_success "$target build completed"
-                else
-                    log_warning "$target build failed, continuing..."
-                fi
-            fi
-        done
-        log_success "All builds completed"
+        build_multiple_targets "${default_targets[@]}"
     fi
     
     # 生成version.ini文件
@@ -617,18 +556,28 @@ show_help() {
     echo "Usage: $0 [TARGET]"
     echo ""
     echo "TARGET (optional):"
-    echo "  aarch64-linux-gnu      Build ARM 64-bit glibc version"
-    echo "  arm-linux-gnueabihf    Build ARM 32-bit glibc version"
-    echo "  aarch64-linux-musl     Build ARM 64-bit musl version"
-    echo "  arm-linux-musleabihf   Build ARM 32-bit musl version"
-    echo "  riscv64-linux-gnu      Build RISC-V 64-bit glibc version"
-    echo "  riscv64-linux-musl     Build RISC-V 64-bit musl version"
-    echo "  aarch64-linux-android  Build Android ARM 64-bit version"
-    echo "  arm-linux-android      Build Android ARM 32-bit version"
-    echo "  x86_64-linux-gnu       Build x86 64-bit Linux version"
-    echo "  x86_64-windows-gnu     Build x86 64-bit Windows version"
-    echo "  x86_64-macos           Build x86 64-bit macOS version"
-    echo "  aarch64-macos          Build ARM 64-bit macOS version"
+    
+    # 使用目标配置映射生成帮助信息
+    local target_descriptions=(
+        "aarch64-linux-gnu:Build ARM 64-bit glibc version"
+        "arm-linux-gnueabihf:Build ARM 32-bit glibc version"
+        "aarch64-linux-musl:Build ARM 64-bit musl version"
+        "arm-linux-musleabihf:Build ARM 32-bit musl version"
+        "riscv64-linux-gnu:Build RISC-V 64-bit glibc version"
+        "riscv64-linux-musl:Build RISC-V 64-bit musl version"
+        "aarch64-linux-android:Build Android ARM 64-bit version"
+        "arm-linux-android:Build Android ARM 32-bit version"
+        "x86_64-linux-gnu:Build x86 64-bit Linux version"
+        "x86_64-windows-gnu:Build x86 64-bit Windows version"
+        "x86_64-macos:Build x86 64-bit macOS version"
+        "aarch64-macos:Build ARM 64-bit macOS version"
+    )
+    
+    for desc in "${target_descriptions[@]}"; do
+        IFS=':' read -r target description <<< "$desc"
+        printf "  %-25s %s\n" "$target" "$description"
+    done
+    
     echo ""
     echo "Examples:"
     echo "  $0                    # Build default targets ($_DEFAULT_BUILD_TARGETS)"
