@@ -230,7 +230,7 @@ build_target() {
     
     # Android 特殊处理
     if [[ "$target_name" == *"-android" ]]; then
-        local ndk_path="${ANDROID_NDK_HOME:-$HOME/sdk/android_ndk/android-ndk-r21e}"
+        local ndk_path="${ANDROID_NDK_HOME:-$HOME/sdk/android_ndk/android-ndk-r25c}"
         if [ ! -d "$ndk_path" ]; then
             log_error "Android NDK not found: $ndk_path"
             return 1
@@ -640,7 +640,7 @@ show_help() {
     echo "  $0 --clean            # Clean all build artifacts"
     echo ""
     echo "Environment Variables:"
-    echo "  ANDROID_NDK_HOME      Path to Android NDK (default: ~/sdk/android_ndk/android-ndk-r21e)"
+    echo "  ANDROID_NDK_HOME      Path to Android NDK (default: ~/sdk/android_ndk/android-ndk-r25c)"
     echo ""
 }
 

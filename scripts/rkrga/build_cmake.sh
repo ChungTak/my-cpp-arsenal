@@ -622,7 +622,7 @@ init_android_env() {
     if [[ "$target" == "aarch64-linux-android" || "$target" == "arm-linux-android" ]]; then
         # 展开波浪号路径
         local default_ndk_path
-        default_ndk_path=$(eval echo "~/sdk/android_ndk/android-ndk-r21e")
+        default_ndk_path=$(eval echo "~/sdk/android_ndk/android-ndk-r25c")
         export ANDROID_NDK_ROOT="${ANDROID_NDK_HOME:-$default_ndk_path}"
         HOST_TAG=linux-x86_64
         TOOLCHAIN=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/$HOST_TAG

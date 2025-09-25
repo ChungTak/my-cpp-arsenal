@@ -541,7 +541,7 @@ init_android_env() {
     if [[ "$target" == "aarch64-linux-android" || "$target" == "arm-linux-android" ]]; then
         # 展开波浪号路径
         local default_ndk_path
-        default_ndk_path=$(eval echo "~/sdk/android_ndk/android-ndk-r21e")
+        default_ndk_path=$(eval echo "~/sdk/android_ndk/android-ndk-r25c")
         export ANDROID_NDK_ROOT="${ANDROID_NDK_HOME:-$default_ndk_path}"
         HOST_TAG=linux-x86_64
         TOOLCHAIN=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/$HOST_TAG
@@ -926,7 +926,7 @@ show_help() {
     echo ""
     echo "Environment Variables:"
     echo "  TOOLCHAIN_ROOT_DIR    Path to cross-compilation toolchain (optional)"
-    echo "  ANDROID_NDK_HOME      Path to Android NDK (default: ~/sdk/android_ndk/android-ndk-r21e)"
+    echo "  ANDROID_NDK_HOME      Path to Android NDK (default: ~/sdk/android_ndk/android-ndk-r25c)"
     echo ""
     echo "Examples:"
     echo "  $0                    # Build default targets (aarch64-linux-gnu, arm-linux-gnueabihf, aarch64-linux-android, arm-linux-android)"

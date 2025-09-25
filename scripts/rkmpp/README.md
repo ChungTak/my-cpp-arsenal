@@ -51,7 +51,7 @@ cd scripts/rkmpp
 
 ### 环境变量
 
-- `ANDROID_NDK_HOME` - Android NDK 路径（默认：~/sdk/android_ndk/android-ndk-r21e）
+- `ANDROID_NDK_HOME` - Android NDK 路径（默认：~/sdk/android_ndk/android-ndk-r25c）
 - `TOOLCHAIN_ROOT_DIR` - 交叉编译工具链路径（可选）
 
 ## 功能特性
