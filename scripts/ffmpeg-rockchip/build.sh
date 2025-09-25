@@ -42,6 +42,67 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+# 检查工具是否存在
+check_tool_exists() {
+    local tool_name="$1"
+    local cross_prefix="$2"
+    local tool_path=""
+    
+    if [ -n "$cross_prefix" ]; then
+        tool_path="${cross_prefix}${tool_name}"
+        if command -v "$tool_path" &> /dev/null; then
+            echo "$tool_path"
+            return 0
+        fi
+    fi
+    
+    if command -v "$tool_name" &> /dev/null; then
+        echo "$tool_name"
+        return 0
+    fi
+    
+    return 1
+}
+
+# 检查工具列表
+check_tools_list() {
+    local cross_prefix="$1"
+    local tools=("$2")
+    
+    local tools_status=""
+    
+    for tool in "${tools[@]}"; do
+        local tool_path
+        if tool_path=$(check_tool_exists "$tool" "$cross_prefix"); then
+            tools_status="${tools_status}${tool}:${tool_path} "
+        fi
+    done
+    
+    echo "$tools_status"
+}
+
+# 检查交叉编译工具是否可用
+check_cross_compile_tools() {
+    local cross_prefix="$1"
+    local target_name="$2"
+    
+    log_info "检查 $target_name 的交叉编译工具 (前缀: ${cross_prefix:-'系统默认'})..."
+    
+    local tools_status=""
+    
+    # 检查编译工具
+    tools_status+=$(check_tools_list "$cross_prefix" "strip objcopy")
+    
+    # 检查通用压缩工具
+    for tool in upx xz gzip; do
+        if command -v "$tool" &> /dev/null; then
+            tools_status="${tools_status}${tool}:${tool} "
+        fi
+    done
+    
+    echo "$tools_status"
+}
+
 # 检查必要的工具
 check_tools() {
     local tools=("git" "make")
@@ -567,6 +628,17 @@ execute_build_process() {
     
     log_success "Target $target_name build completed successfully"
     
+    # 压缩库文件
+    if [[ "$target_name" == *"-android" ]]; then
+        compress_android_libraries "$output_dir" "$target_name"
+    else
+        local cross_prefix
+        cross_prefix=$(get_cross_tools "$target_name")
+        local available_tools
+        available_tools=$(check_cross_compile_tools "$cross_prefix" "$target_name")
+        compress_libraries "$output_dir" "$target_name" "$available_tools"
+    fi
+    
     # 返回到工作目录
     cd "$WORKSPACE_DIR"
     
@@ -682,6 +754,218 @@ parse_arguments() {
     echo "$target"
 }
 
+# 压缩单个库文件
+compress_single_library() {
+    local lib_file="$1"
+    local strip_cmd="$2"
+    local objcopy_cmd="$3"
+    
+    local original_size
+    original_size=$(stat -c%s "$lib_file" 2>/dev/null || echo "0")
+    
+    local final_size=$original_size
+    local compression_method="none"
+    local compression_applied=false
+    
+    log_info "  处理: $(basename "$lib_file") (${original_size} 字节)"
+    
+    # 使用 strip 工具移除符号表
+    if [ -n "$strip_cmd" ]; then
+        local backup_file="${lib_file}.backup"
+        cp "$lib_file" "$backup_file"
+        
+        log_info "    使用 $strip_cmd 移除符号表..."
+        
+        # 根据文件类型使用不同的 strip 参数
+        if [[ "$lib_file" == *.so* ]]; then
+            "$strip_cmd" --strip-unneeded "$lib_file" 2>/dev/null || true
+        else
+            "$strip_cmd" --strip-debug "$lib_file" 2>/dev/null || true
+        fi
+        
+        local stripped_size
+        stripped_size=$(stat -c%s "$lib_file" 2>/dev/null || echo "$original_size")
+        
+        if [ "$stripped_size" -lt "$original_size" ]; then
+            final_size=$stripped_size
+            compression_method="strip"
+            compression_applied=true
+            rm -f "$backup_file"
+            local strip_reduction
+            strip_reduction=$(( (original_size - stripped_size) * 100 / original_size ))
+            log_success "      移除 ${strip_reduction}% 符号 ($strip_cmd)"
+        else
+            mv "$backup_file" "$lib_file"
+            log_info "      Strip 操作无效"
+        fi
+    fi
+    
+    # 使用 objcopy 进一步优化
+    if [ -n "$objcopy_cmd" ] && [ "$compression_applied" = "true" ]; then
+        log_info "    使用 $objcopy_cmd 优化..."
+        if "$objcopy_cmd" --remove-section=.comment --remove-section=.note "$lib_file" 2>/dev/null; then
+            local objcopy_size
+            objcopy_size=$(stat -c%s "$lib_file" 2>/dev/null || echo "$final_size")
+            if [ "$objcopy_size" -lt "$final_size" ]; then
+                final_size=$objcopy_size
+                compression_method="${compression_method}+objcopy"
+                log_info "      objcopy 优化完成"
+            fi
+        fi
+    fi
+    
+    if [ "$compression_applied" = "true" ]; then
+        local total_reduction
+        total_reduction=$(( (original_size - final_size) * 100 / original_size ))
+        log_success "    最终: $original_size → $final_size 字节 (-${total_reduction}%, ${compression_method#none+})"
+    else
+        log_info "    未应用压缩"
+    fi
+    
+    echo "$final_size:$compression_applied"
+}
+
+# 通用库文件压缩函数
+compress_libraries() {
+    local output_dir="$1"
+    local target_name="$2"
+    local available_tools="$3"
+    
+    log_info "压缩 $target_name 的库文件..."
+    
+    # 解析可用工具
+    local strip_cmd=""
+    local objcopy_cmd=""
+    
+    if [ -n "$available_tools" ]; then
+        strip_cmd=$(echo "$available_tools" | grep -o "strip:[^ ]*" | cut -d: -f2)
+        objcopy_cmd=$(echo "$available_tools" | grep -o "objcopy:[^ ]*" | cut -d: -f2)
+    fi
+    
+    # 显示可用的工具
+    if [ -n "$strip_cmd" ] || [ -n "$objcopy_cmd" ]; then
+        log_info "可用压缩工具:"
+        [ -n "$strip_cmd" ] && log_info "  Strip: $strip_cmd"
+        [ -n "$objcopy_cmd" ] && log_info "  Objcopy: $objcopy_cmd"
+    else
+        log_warning "未找到可用的压缩工具，跳过压缩"
+        return 0
+    fi
+    
+    # 查找所有 .so 和 .a 文件
+    local lib_files
+    lib_files=$(find "$output_dir" -type f \( -name "*.so*" -o -name "*.a" \) 2>/dev/null || true)
+    
+    if [ -z "$lib_files" ]; then
+        log_warning "在 $output_dir 中未找到库文件"
+        return 0
+    fi
+    
+    local compressed_count=0
+    local total_original_size=0
+    local total_compressed_size=0
+    
+    while IFS= read -r lib_file; do
+        [ -z "$lib_file" ] && continue
+        
+        local original_size
+        original_size=$(stat -c%s "$lib_file" 2>/dev/null || echo "0")
+        total_original_size=$((total_original_size + original_size))
+        
+        local result
+        result=$(compress_single_library "$lib_file" "$strip_cmd" "$objcopy_cmd")
+        local final_size="${result%%:*}"
+        local compression_applied="${result##*:}"
+        
+        total_compressed_size=$((total_compressed_size + final_size))
+        
+        if [ "$compression_applied" = "true" ]; then
+            compressed_count=$((compressed_count + 1))
+        fi
+        
+    done <<< "$lib_files"
+    
+    # 显示压缩统计
+    if [ "$compressed_count" -gt 0 ]; then
+        local total_reduction
+        total_reduction=$(( (total_original_size - total_compressed_size) * 100 / total_original_size ))
+        log_success "$target_name 压缩统计:"
+        log_success "  处理文件数: $(echo "$lib_files" | wc -l)"
+        log_success "  优化文件数: $compressed_count"
+        log_success "  总大小: $total_original_size → $total_compressed_size 字节 (-${total_reduction}%)"
+    else
+        log_info "$target_name 未实现显著压缩 (文件可能已优化)"
+    fi
+}
+
+# Android库文件压缩（使用通用压缩函数）
+compress_android_libraries() {
+    local output_dir="$1"
+    local target_name="$2"
+    
+    log_info "压缩 Android 库文件: $target_name..."
+    
+    # Android下可用的工具
+    local strip_cmd=""
+    local available_tools=""
+    
+    # 检查Android NDK中的strip工具
+    case "$ANDROID_ABI" in
+        "arm64-v8a")
+            strip_cmd="$TOOLCHAIN/bin/aarch64-linux-android-strip"
+            ;;
+        "armeabi-v7a")
+            strip_cmd="$TOOLCHAIN/bin/arm-linux-androideabi-strip"
+            ;;
+    esac
+    
+    if [ -n "$strip_cmd" ] && command -v "$strip_cmd" &> /dev/null; then
+        available_tools="strip:$strip_cmd "
+        log_info "可用 Android 工具: $available_tools"
+    else
+        log_warning "未找到 Android strip 工具，跳过压缩"
+        return 0
+    fi
+    
+    # 使用通用压缩函数
+    compress_libraries "$output_dir" "$target_name" "$available_tools"
+}
+
+# 创建版本信息文件
+create_version_file() {
+    log_info "Creating version.ini file..."
+    
+    local version_file="${FFMPEG_OUTPUT_DIR}/version.ini"
+    local changelog_file="${FFMPEG_SOURCE_DIR}/Changelog"
+    
+    # 检查Changelog是否存在
+    if [ ! -f "$changelog_file" ]; then
+        log_warning "Changelog not found: $changelog_file"
+        echo "version=unknown" > "$version_file"
+        log_warning "Created version.ini with unknown version"
+        return 0
+    fi
+    
+    # 提取最新版本号（格式：version 6.1:）
+    local latest_version
+    latest_version=$(grep -E "^version [0-9]+\.[0-9]+:" "$changelog_file" | head -1 | sed -E 's/^version ([0-9]+\.[0-9]+):.*/\1/')
+    
+    if [ -z "$latest_version" ]; then
+        log_warning "Could not extract version from Changelog"
+        echo "version=unknown" > "$version_file"
+        log_warning "Created version.ini with unknown version"
+        return 0
+    fi
+    
+    # 写入版本信息到version.ini
+    cat > "$version_file" << EOF
+[version]
+version=$latest_version
+EOF
+    
+    log_success "Created version.ini with version: $latest_version"
+}
+
 # 主函数
 main() {
     local target_to_build="$1"
@@ -748,6 +1032,9 @@ main() {
     log_success "Build process completed!"
     log_info "Output directory: $FFMPEG_OUTPUT_DIR"
     
+    # 生成version.ini文件
+    create_version_file
+
     # 显示目录结构
     log_info "Directory structure:"
     find "$FFMPEG_OUTPUT_DIR" -maxdepth 2 -type d | sort
