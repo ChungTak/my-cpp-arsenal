@@ -2,7 +2,7 @@
 
 ## 概述
 
-`scirpts/rkrga/build.sh` 是一个用于构建 RK RGA (Rockchip RGA) 库的多架构交叉编译脚本，支持多种架构和C库组合。
+`scripts/rkrga/build.sh` 是一个用于构建 RK RGA (Rockchip RGA) 库的多架构交叉编译脚本，支持多种架构和C库组合。
 
 ## 功能特性
 
@@ -36,21 +36,21 @@
 
 ```bash
 # 构建所有支持的架构
-./scirpts/rkrga/build.sh
+./scripts/rkrga/build.sh
 
 # 构建指定的单个架构
-./scirpts/rkrga/build.sh aarch64-linux-gnu   # 构建ARM 64位 glibc版本
-./scirpts/rkrga/build.sh aarch64-linux-musl  # 构建ARM 64位 musl版本
-./scirpts/rkrga/build.sh aarch64-linux-android  # 构建Android ARM 64位版本
+./scripts/rkrga/build.sh aarch64-linux-gnu   # 构建ARM 64位 glibc版本
+./scripts/rkrga/build.sh aarch64-linux-musl  # 构建ARM 64位 musl版本
+./scripts/rkrga/build.sh aarch64-linux-android  # 构建Android ARM 64位版本
 
 # 显示帮助信息
-./scirpts/rkrga/build.sh --help
+./scripts/rkrga/build.sh --help
 
 # 清理构建目录
-./scirpts/rkrga/build.sh --clean
+./scripts/rkrga/build.sh --clean
 
 # 清理所有（源码和输出）
-./scirpts/rkrga/build.sh --clean-all
+./scripts/rkrga/build.sh --clean-all
 ```
 
 ### 环境变量
@@ -63,24 +63,24 @@
 
 ```bash
 # 使用系统默认工具链构建所有目标
-./scirpts/rkrga/build.sh
+./scripts/rkrga/build.sh
 
 # 构建单个目标
-./scirpts/rkrga/build.sh aarch64-linux-gnu
+./scripts/rkrga/build.sh aarch64-linux-gnu
 
 # 使用自定义工具链路径构建特定目标
 export TOOLCHAIN_ROOT_DIR=/opt/gcc-arm-10.3-2021.07-x86_64-aarch64-linux-gnu
-./scirpts/rkrga/build.sh aarch64-linux-gnu
+./scripts/rkrga/build.sh aarch64-linux-gnu
 
 # 构建Android目标（需要设置ANDROID_NDK_HOME环境变量）
 export ANDROID_NDK_HOME=/opt/android-ndk-r25c
-./scirpts/rkrga/build.sh aarch64-linux-android
+./scripts/rkrga/build.sh aarch64-linux-android
 
 # 构建Windows目标
-./scirpts/rkrga/build.sh x86_64-windows-gnu
+./scripts/rkrga/build.sh x86_64-windows-gnu
 
 # 构建macOS目标
-./scirpts/rkrga/build.sh aarch64-macos
+./scripts/rkrga/build.sh aarch64-macos
 ```
 
 ## 输出结构

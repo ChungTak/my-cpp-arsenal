@@ -16,7 +16,7 @@ rkmpp/
 
 ```bash
 # 进入脚本目录
-cd scirpts/rkmpp
+cd scripts/rkmpp
 
 # 构建所有默认目标
 ./build.sh

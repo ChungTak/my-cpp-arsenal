@@ -1,6 +1,6 @@
 # libdrm 构建脚本
 
-这是一个用于交叉编译 libdrm 库的自动化构建脚本，基于 [scirpts/rkrga/build.sh](../rkrga/build.sh) 的结构开发。
+这是一个用于交叉编译 libdrm 库的自动化构建脚本，基于 [scripts/rkrga/build.sh](../rkrga/build.sh) 的结构开发。
 
 ## 特性
 
