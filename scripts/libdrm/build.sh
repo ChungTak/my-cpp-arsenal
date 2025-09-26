@@ -113,29 +113,58 @@ check_cross_compile_tools() {
     # 检查压缩相关工具
     local tools_status=""
     
-    # strip 工具
-    if [ -n "$cross_prefix" ]; then
-        if command -v "${cross_prefix}strip" &> /dev/null; then
-            tools_status="${tools_status}strip:${cross_prefix}strip "
-        elif command -v "strip" &> /dev/null; then
-            tools_status="${tools_status}strip:strip "
-        fi
-    else
-        if command -v "strip" &> /dev/null; then
-            tools_status="${tools_status}strip:strip "
+    # 特殊处理 Android 目标
+    if [[ "$target_name" == *"-android" ]]; then
+        log_info "Android target detected, using LLVM tools from Android NDK"
+        
+        # 检查 Android NDK 环境
+        if [ -n "$ANDROID_NDK_ROOT" ] && [ -d "$ANDROID_NDK_ROOT" ]; then
+            local ndk_toolchain="${ANDROID_NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64"
+            
+            # 检查 Android LLVM strip 工具
+            if [ -f "${ndk_toolchain}/bin/llvm-strip" ]; then
+                tools_status="${tools_status}strip:${ndk_toolchain}/bin/llvm-strip "
+                log_info "✓ Found Android LLVM strip tool: ${ndk_toolchain}/bin/llvm-strip"
+            fi
+            
+            # 检查 Android LLVM objcopy 工具
+            if [ -f "${ndk_toolchain}/bin/llvm-objcopy" ]; then
+                tools_status="${tools_status}objcopy:${ndk_toolchain}/bin/llvm-objcopy "
+                log_info "✓ Found Android LLVM objcopy tool: ${ndk_toolchain}/bin/llvm-objcopy"
+            fi
+        else
+            log_warning "Android NDK not found, falling back to system tools"
         fi
     fi
     
-    # objcopy 工具
-    if [ -n "$cross_prefix" ]; then
-        if command -v "${cross_prefix}objcopy" &> /dev/null; then
-            tools_status="${tools_status}objcopy:${cross_prefix}objcopy "
-        elif command -v "objcopy" &> /dev/null; then
-            tools_status="${tools_status}objcopy:objcopy "
+    # 如果 Android 工具未找到或不是 Android 目标，使用常规工具检测
+    if [ -z "$tools_status" ] || [[ "$tools_status" != *"strip:"* ]]; then
+        # strip 工具
+        if [ -n "$cross_prefix" ]; then
+            if command -v "${cross_prefix}strip" &> /dev/null; then
+                tools_status="${tools_status}strip:${cross_prefix}strip "
+            elif command -v "strip" &> /dev/null; then
+                tools_status="${tools_status}strip:strip "
+            fi
+        else
+            if command -v "strip" &> /dev/null; then
+                tools_status="${tools_status}strip:strip "
+            fi
         fi
-    else
-        if command -v "objcopy" &> /dev/null; then
-            tools_status="${tools_status}objcopy:objcopy "
+    fi
+    
+    if [ -z "$tools_status" ] || [[ "$tools_status" != *"objcopy:"* ]]; then
+        # objcopy 工具
+        if [ -n "$cross_prefix" ]; then
+            if command -v "${cross_prefix}objcopy" &> /dev/null; then
+                tools_status="${tools_status}objcopy:${cross_prefix}objcopy "
+            elif command -v "objcopy" &> /dev/null; then
+                tools_status="${tools_status}objcopy:objcopy "
+            fi
+        else
+            if command -v "objcopy" &> /dev/null; then
+                tools_status="${tools_status}objcopy:objcopy "
+            fi
         fi
     fi
     
@@ -634,10 +663,13 @@ execute_libdrm_build() {
     
     log_info "Executing libdrm build for $target_name..."
     
-    # 配置Meson
+    # 配置Meson - 强制使用交叉编译文件
     local MESON_CMD="meson setup $build_dir $LIBDRM_SOURCE_DIR -Dprefix=$output_dir -Dbuildtype=release -Dlibdir=lib"
-    if [ -n "$cross_file" ]; then
+    if [ -n "$cross_file" ] && [ -f "$cross_file" ]; then
         MESON_CMD="$MESON_CMD --cross-file=$cross_file"
+        log_info "Using cross-file: $cross_file"
+    else
+        log_warning "Cross-file not found or not specified, using native build"
     fi
     if [ -n "$meson_options" ]; then
         MESON_CMD="$MESON_CMD $meson_options"
@@ -673,7 +705,12 @@ execute_libdrm_build() {
     if [ "$is_android" = "true" ]; then
         compress_android_libraries "$output_dir" "$target_name"
     else
-        compress_libraries "$output_dir" "$target_name" ""
+        # 对于非Android目标，需要重新检测可用的工具
+        local cross_prefix
+        cross_prefix=$(get_cross_compile_prefix "$target_name")
+        local available_tools
+        available_tools=$(check_cross_compile_tools "$cross_prefix" "$target_name")
+        compress_libraries "$output_dir" "$target_name" "$available_tools"
     fi
     
     # 验证构建架构
@@ -739,7 +776,7 @@ build_target() {
     MESON_CMD="$MESON_CMD $meson_options"
     
     # 使用统一的构建执行函数
-    execute_libdrm_build "$target_name" "$output_dir" "$build_dir" "" "" "false"
+    execute_libdrm_build "$target_name" "$output_dir" "$build_dir" "$CROSS_FILE" "$meson_options" "false"
 }
 
 # 压缩库文件

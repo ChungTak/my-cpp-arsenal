@@ -112,8 +112,8 @@ get_target_config() {
     echo "${TARGET_CONFIGS[$target]:-}"
 }
 
-# 设置 libdrm 依赖
-setup_libdrm_dependency() {
+# 检查并构建 libdrm 依赖
+check_and_build_libdrm_dependency() {
     local target="$1"
     local config="${TARGET_CONFIGS[$target]:-}"
     
@@ -124,10 +124,50 @@ setup_libdrm_dependency() {
     
     IFS=':' read -r target_name output_dir libdrm_dir cross_prefix expected_arch <<< "$config"
     
-    if [ ! -d "$libdrm_dir" ]; then
-        log_error "libdrm dependency not found: $libdrm_dir"
+    # 检查 libdrm 依赖目录是否存在
+    if [ -d "$libdrm_dir" ]; then
+        log_success "libdrm dependency already exists: $libdrm_dir"
+        return 0
+    fi
+    
+    log_info "libdrm dependency not found: $libdrm_dir"
+    log_info "Building libdrm dependency for target: $target_name"
+    
+    # 检查 libdrm 构建脚本是否存在
+    local libdrm_build_script="${WORKSPACE_DIR}/scripts/libdrm/build.sh"
+    if [ ! -f "$libdrm_build_script" ]; then
+        log_error "libdrm build script not found: $libdrm_build_script"
         return 1
     fi
+    
+    # 调用 libdrm 构建脚本，透传目标参数
+    log_info "Executing: $libdrm_build_script $target_name"
+    if ! "$libdrm_build_script" "$target_name"; then
+        log_error "libdrm dependency build failed for target: $target_name"
+        return 1
+    fi
+    
+    # 验证构建结果
+    if [ ! -d "$libdrm_dir" ]; then
+        log_error "libdrm dependency build completed but directory not found: $libdrm_dir"
+        return 1
+    fi
+    
+    log_success "libdrm dependency built successfully: $libdrm_dir"
+    return 0
+}
+
+# 设置 libdrm 依赖
+setup_libdrm_dependency() {
+    local target="$1"
+    
+    # 先检查并构建依赖
+    if ! check_and_build_libdrm_dependency "$target"; then
+        return 1
+    fi
+    
+    local config="${TARGET_CONFIGS[$target]:-}"
+    IFS=':' read -r target_name output_dir libdrm_dir cross_prefix expected_arch <<< "$config"
     
     export PKG_CONFIG_PATH="${libdrm_dir}/lib/pkgconfig:${PKG_CONFIG_PATH}"
     export LD_LIBRARY_PATH="${libdrm_dir}/lib:${LD_LIBRARY_PATH}"
@@ -180,6 +220,20 @@ build_target() {
     
     # 执行 Meson 构建
     log_info "Configuring with meson..."
+    
+    # 确保使用交叉编译文件
+    if [[ "$target_name" == *"-android" ]]; then
+        if [ -f "${SCRIPT_DIR}/android-cross.txt" ]; then
+            meson_options="$meson_options --cross-file=${SCRIPT_DIR}/android-cross.txt"
+            log_info "Using Android cross-file: ${SCRIPT_DIR}/android-cross.txt"
+        fi
+    elif [ -n "$cross_prefix" ] && [ -f "${SCRIPT_DIR}/cross-${target_name}.txt" ]; then
+        meson_options="$meson_options --cross-file=${SCRIPT_DIR}/cross-${target_name}.txt"
+        log_info "Using cross-file: ${SCRIPT_DIR}/cross-${target_name}.txt"
+    else
+        log_warning "Cross-file not found or not specified, using native build"
+    fi
+    
     meson setup "$build_dir" "$LIBRGA_SOURCE_DIR" -Dprefix="$output_dir" $meson_options
     
     if [ $? -ne 0 ]; then
@@ -205,8 +259,14 @@ build_target() {
     
     log_success "$target_name build completed"
     
+    # 获取交叉编译前缀并检测可用工具
+    local cross_prefix
+    cross_prefix=$(get_cross_compile_prefix "$target_name")
+    local available_tools
+    available_tools=$(check_cross_compile_tools "$cross_prefix")
+    
     # 压缩库文件
-    compress_libraries "$output_dir" "$target_name"
+    compress_libraries "$output_dir" "$target_name" "$available_tools"
     
     # 验证构建架构
     validate_build_architecture "$output_dir" "$target_name"
@@ -274,20 +334,20 @@ setup_cross_compile() {
     local cross_prefix="$2"
     
     # 检查交叉编译工具是否可用
-    if ! command -v "${cross_prefix}gcc" &> /dev/null; then
+    if ! command -v "${cross_prefix}-gcc" &> /dev/null; then
         return 1
     fi
     
-    log_info "Using cross compiler: ${cross_prefix}gcc"
+    log_info "Using cross compiler: ${cross_prefix}-gcc"
     
     # 创建交叉编译文件
     local cross_file="${SCRIPT_DIR}/cross-${target_name}.txt"
     cat > "$cross_file" << EOF
 [binaries]
-c = ['${cross_prefix}gcc']
-cpp = ['${cross_prefix}g++']
-ar = ['${cross_prefix}ar']
-strip = ['${cross_prefix}strip']
+c = ['${cross_prefix}-gcc']
+cpp = ['${cross_prefix}-g++']
+ar = ['${cross_prefix}-ar']
+strip = ['${cross_prefix}-strip']
 pkg-config = 'pkg-config'
 
 [host_machine]
@@ -310,12 +370,118 @@ EOF
 
 
 
+# 检查交叉编译工具
+check_cross_compile_tools() {
+    local cross_prefix="$1"
+    local available_tools=""
+    
+    # 使用 stderr 输出调试信息，避免被命令替换捕获
+    log_info "Checking available compression tools for cross-compilation..." >&2
+    log_info "Cross prefix: '$cross_prefix'" >&2
+    
+    # 特殊处理 Android 目标
+    if [[ "$cross_prefix" == *"android"* ]]; then
+        log_info "Android target detected, using LLVM tools from Android NDK" >&2
+        
+        # 检查 Android NDK 中的 LLVM 工具
+        local ndk_path="/home/kemove/sdk/android_ndk/android-ndk-r25c"
+        local llvm_bin="$ndk_path/toolchains/llvm/prebuilt/linux-x86_64/bin"
+        
+        # 检查 llvm-strip
+        if [ -f "$llvm_bin/llvm-strip" ]; then
+            available_tools="${available_tools}strip:$llvm_bin/llvm-strip "
+            log_info "✓ Found Android LLVM strip tool: $llvm_bin/llvm-strip" >&2
+        elif command -v "llvm-strip" >/dev/null 2>&1; then
+            available_tools="${available_tools}strip:llvm-strip "
+            log_info "✓ Found system LLVM strip tool" >&2
+        else
+            log_warning "No LLVM strip tool available for Android target" >&2
+        fi
+        
+        # 检查 llvm-objcopy
+        if [ -f "$llvm_bin/llvm-objcopy" ]; then
+            available_tools="${available_tools}objcopy:$llvm_bin/llvm-objcopy "
+            log_info "✓ Found Android LLVM objcopy tool: $llvm_bin/llvm-objcopy" >&2
+        elif command -v "llvm-objcopy" >/dev/null 2>&1; then
+            available_tools="${available_tools}objcopy:llvm-objcopy "
+            log_info "✓ Found system LLVM objcopy tool" >&2
+        else
+            log_warning "No LLVM objcopy tool available for Android target" >&2
+        fi
+    else
+        
+        # 检查交叉编译 strip 工具
+        if command -v "${cross_prefix}-strip" >/dev/null 2>&1; then
+            available_tools="${available_tools}strip:${cross_prefix}-strip "
+            log_info "✓ Found cross strip tool: ${cross_prefix}-strip" >&2
+        elif command -v "strip" >/dev/null 2>&1; then
+            available_tools="${available_tools}strip:strip "
+            log_info "✓ Found system strip tool" >&2
+        else
+            log_warning "No strip tool available for this target" >&2
+        fi
+        
+        # 检查交叉编译 objcopy 工具
+        if command -v "${cross_prefix}-objcopy" >/dev/null 2>&1; then
+            available_tools="${available_tools}objcopy:${cross_prefix}-objcopy "
+            log_info "✓ Found cross objcopy tool: ${cross_prefix}-objcopy" >&2
+        elif command -v "objcopy" >/dev/null 2>&1; then
+            available_tools="${available_tools}objcopy:objcopy "
+            log_info "✓ Found system objcopy tool" >&2
+        else
+            log_warning "No objcopy tool available for this target" >&2
+        fi
+    fi
+    
+    # 检查 UPX 工具（仅适用于本机架构）
+    if command -v "upx" >/dev/null 2>&1; then
+        available_tools="${available_tools}upx:upx "
+        log_info "✓ Found UPX compression tool" >&2
+    else
+        log_info "UPX not available for this target" >&2
+    fi
+    
+    # 如果没有任何工具可用，记录警告
+    if [ -z "$available_tools" ]; then
+        log_warning "No compression tools available for target: $cross_prefix" >&2
+    else
+        log_info "Available tools: $available_tools" >&2
+    fi
+    
+    # 只返回工具列表，不包含调试信息
+    echo "$available_tools"
+}
+
+# 获取交叉编译前缀
+get_cross_compile_prefix() {
+    local target_name="$1"
+    local config="${TARGET_CONFIGS[$target_name]:-}"
+    
+    if [ -z "$config" ]; then
+        echo ""
+        return 0
+    fi
+    
+    IFS=':' read -r target_name output_dir libdrm_dir cross_prefix expected_arch <<< "$config"
+    echo "$cross_prefix"
+}
+
 # 压缩库文件
 compress_libraries() {
     local output_dir="$1"
     local target_name="$2"
+    local available_tools="$3"
     
     log_info "Compressing libraries for $target_name..."
+    
+    # 获取交叉编译前缀
+    local cross_prefix
+    cross_prefix=$(get_cross_compile_prefix "$target_name")
+    
+    # 如果没有传入 available_tools，则检测工具
+    if [ -z "$available_tools" ]; then
+        available_tools=$(check_cross_compile_tools "$cross_prefix")
+    fi
     
     local lib_files
     lib_files=$(find "$output_dir" -type f \( -name "*.so*" -o -name "*.a" \) 2>/dev/null || true)
@@ -329,6 +495,28 @@ compress_libraries() {
     local total_original_size=0
     local total_compressed_size=0
     
+    # 解析可用工具
+    local strip_tool=""
+    local objcopy_tool=""
+    local upx_tool=""
+    
+    # 使用空格分隔解析工具
+    IFS=' ' read -ra tools <<< "$available_tools"
+    for tool_info in "${tools[@]}"; do
+        if [[ "$tool_info" == strip:* ]]; then
+            strip_tool="${tool_info#strip:}"
+        elif [[ "$tool_info" == objcopy:* ]]; then
+            objcopy_tool="${tool_info#objcopy:}"
+        elif [[ "$tool_info" == upx:* ]]; then
+            upx_tool="${tool_info#upx:}"
+        fi
+    done
+    
+    log_info "Available compression tools:"
+    [ -n "$strip_tool" ] && log_info "  Strip: $strip_tool"
+    [ -n "$objcopy_tool" ] && log_info "  Objcopy: $objcopy_tool"
+    [ -n "$upx_tool" ] && log_info "  UPX: $upx_tool"
+    
     while IFS= read -r lib_file; do
         [ -z "$lib_file" ] && continue
         
@@ -340,14 +528,14 @@ compress_libraries() {
         local compression_applied=false
         
         # 使用 strip 工具优化
-        if command -v "strip" &> /dev/null; then
+        if [ -n "$strip_tool" ]; then
             local backup_file="${lib_file}.backup"
             cp "$lib_file" "$backup_file"
             
             if [[ "$lib_file" == *.so* ]]; then
-                strip --strip-unneeded "$lib_file" 2>/dev/null || true
+                "$strip_tool" --strip-unneeded "$lib_file" 2>/dev/null || true
             else
-                strip --strip-debug "$lib_file" 2>/dev/null || true
+                "$strip_tool" --strip-debug "$lib_file" 2>/dev/null || true
             fi
             
             local stripped_size
@@ -379,6 +567,8 @@ compress_libraries() {
         log_success "  Files processed: $(echo "$lib_files" | wc -l)"
         log_success "  Files optimized: $compressed_count"
         log_success "  Total size: $total_original_size → $total_compressed_size bytes (-${total_reduction}%)"
+    else
+        log_info "No significant compression achieved for $target_name (files may already be optimized)"
     fi
 }
 

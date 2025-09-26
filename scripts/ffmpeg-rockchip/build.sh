@@ -67,39 +67,252 @@ check_tool_exists() {
 # 检查工具列表
 check_tools_list() {
     local cross_prefix="$1"
-    local tools=("$2")
-    
+    local tools_string="$2"
+
     local tools_status=""
-    
+
+    read -ra tools <<< "$tools_string"
+
     for tool in "${tools[@]}"; do
         local tool_path
         if tool_path=$(check_tool_exists "$tool" "$cross_prefix"); then
             tools_status="${tools_status}${tool}:${tool_path} "
         fi
     done
-    
+
     echo "$tools_status"
+}
+
+# 归一化交叉编译前缀，确保以连字符结尾
+normalize_cross_prefix() {
+    local prefix="$1"
+
+    if [ -z "$prefix" ]; then
+        echo ""
+        return 0
+    fi
+
+    prefix="$(echo "$prefix" | tr -d '[:space:]')"
+    if [ -z "$prefix" ]; then
+        echo ""
+        return 0
+    fi
+
+    if [[ "$prefix" != *- ]]; then
+        prefix="${prefix}-"
+    fi
+
+    echo "$prefix"
+}
+
+# 校验工具路径是否存在并与预期前缀匹配
+validate_cross_tool_path() {
+    local candidate="$1"
+    local expected_prefix="$2"
+    local tool_name="$3"
+
+    if [ -z "$candidate" ]; then
+        echo ""
+        return 1
+    fi
+
+    if [[ "$candidate" != /* ]]; then
+        candidate="$(command -v "$candidate" 2>/dev/null || true)"
+    fi
+
+    if [ -z "$candidate" ] || [ ! -x "$candidate" ]; then
+        echo ""
+        return 1
+    fi
+
+    if [ -n "$expected_prefix" ]; then
+        local basename
+        basename="$(basename "$candidate")"
+        local expected_command="${expected_prefix}${tool_name}"
+        if [ "$basename" != "$expected_command" ]; then
+            echo ""
+            return 1
+        fi
+    fi
+
+    echo "$candidate"
+    return 0
+}
+
+find_cross_tool_in_path() {
+    local cross_prefix="$1"
+    local tool_name="$2"
+
+    if [ -z "$cross_prefix" ]; then
+        echo ""
+        return 1
+    fi
+
+    local resolved
+    resolved="$(command -v "${cross_prefix}${tool_name}" 2>/dev/null || true)"
+    resolved="$(validate_cross_tool_path "$resolved" "$cross_prefix" "$tool_name")"
+
+    if [ -n "$resolved" ]; then
+        echo "$resolved"
+        return 0
+    fi
+
+    echo ""
+    return 1
+}
+
+find_cross_tool_in_dirs() {
+    local cross_prefix="$1"
+    local tool_name="$2"
+    shift 2
+
+    if [ -z "$cross_prefix" ]; then
+        echo ""
+        return 1
+    fi
+
+    local candidate
+    for dir in "$@"; do
+        [ -z "$dir" ] && continue
+        candidate="${dir%/}/${cross_prefix}${tool_name}"
+        if [ -x "$candidate" ]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+
+    echo ""
+    return 1
+}
+
+find_tool_in_dirs() {
+    local tool_name="$1"
+    shift
+
+    local candidate
+    for dir in "$@"; do
+        [ -z "$dir" ] && continue
+        candidate="${dir%/}/${tool_name}"
+        if [ -x "$candidate" ]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+
+    echo ""
+    return 1
 }
 
 # 检查交叉编译工具是否可用
 check_cross_compile_tools() {
     local cross_prefix="$1"
     local target_name="$2"
-    
+    local build_dir="$3"
+    local toolchain_file="$4"
+
     log_info "检查 $target_name 的交叉编译工具 (前缀: ${cross_prefix:-'系统默认'})..."
-    
+
     local tools_status=""
-    
-    # 检查编译工具
-    tools_status+=$(check_tools_list "$cross_prefix" "strip objcopy")
-    
-    # 检查通用压缩工具
+    local strip_cmd=""
+    local objcopy_cmd=""
+    local cmake_cache=""
+    local compiler_dir=""
+    local cache_strip=""
+    local cache_objcopy=""
+
+    if [ -n "$build_dir" ]; then
+        cmake_cache="${build_dir%/}/CMakeCache.txt"
+        if [ -f "$cmake_cache" ]; then
+            cache_strip=$(sed -n 's/^CMAKE_STRIP:FILEPATH=//p' "$cmake_cache" | head -n1)
+            strip_cmd=$(validate_cross_tool_path "$cache_strip" "$cross_prefix" "strip")
+
+            cache_objcopy=$(sed -n 's/^CMAKE_OBJCOPY:FILEPATH=//p' "$cmake_cache" | head -n1)
+            objcopy_cmd=$(validate_cross_tool_path "$cache_objcopy" "$cross_prefix" "objcopy")
+
+            local cache_compiler
+            cache_compiler=$(sed -n 's/^CMAKE_C_COMPILER:FILEPATH=//p' "$cmake_cache" | head -n1)
+            if [ -n "$cache_compiler" ]; then
+                compiler_dir="$(dirname "$cache_compiler")"
+            fi
+        fi
+    fi
+
+    local candidate_dirs=()
+    [ -n "$compiler_dir" ] && candidate_dirs+=("$compiler_dir")
+    if [ -n "$TOOLCHAIN_ROOT_DIR" ]; then
+        candidate_dirs+=("$TOOLCHAIN_ROOT_DIR/bin" "$TOOLCHAIN_ROOT_DIR/usr/bin")
+    fi
+    if [ -n "$TOOLCHAIN" ]; then
+        candidate_dirs+=("$TOOLCHAIN/bin" "$TOOLCHAIN")
+    fi
+    if [ -n "$TOOLCHAIN_BIN_DIR" ]; then
+        candidate_dirs+=("$TOOLCHAIN_BIN_DIR")
+    fi
+    if [ -n "$toolchain_file" ]; then
+        local tf_dir
+        tf_dir="$(dirname "$toolchain_file")"
+        candidate_dirs+=("$tf_dir" "$tf_dir/bin" "$(dirname "$tf_dir")/bin")
+    fi
+
+    if [ -z "$cross_prefix" ] && [ -n "$CROSS_COMPILE" ]; then
+        cross_prefix="$(normalize_cross_prefix "$CROSS_COMPILE")"
+    fi
+
+    cross_prefix="$(normalize_cross_prefix "$cross_prefix")"
+
+    if [ -z "$strip_cmd" ]; then
+        strip_cmd=$(find_cross_tool_in_path "$cross_prefix" "strip")
+    fi
+    if [ -z "$objcopy_cmd" ]; then
+        objcopy_cmd=$(find_cross_tool_in_path "$cross_prefix" "objcopy")
+    fi
+
+    if [ -z "$strip_cmd" ]; then
+        strip_cmd=$(find_cross_tool_in_dirs "$cross_prefix" "strip" "${candidate_dirs[@]}")
+    fi
+    if [ -z "$objcopy_cmd" ]; then
+        objcopy_cmd=$(find_cross_tool_in_dirs "$cross_prefix" "objcopy" "${candidate_dirs[@]}")
+    fi
+
+    if [ -z "$strip_cmd" ]; then
+        local llvm_strip
+        llvm_strip=$(command -v llvm-strip 2>/dev/null || true)
+        if [ -z "$llvm_strip" ]; then
+            llvm_strip=$(find_tool_in_dirs "llvm-strip" "${candidate_dirs[@]}")
+        fi
+        strip_cmd=$(validate_cross_tool_path "$llvm_strip" "" "llvm-strip")
+    fi
+
+    if [ -z "$objcopy_cmd" ]; then
+        local llvm_objcopy
+        llvm_objcopy=$(command -v llvm-objcopy 2>/dev/null || true)
+        if [ -z "$llvm_objcopy" ]; then
+            llvm_objcopy=$(find_tool_in_dirs "llvm-objcopy" "${candidate_dirs[@]}")
+        fi
+        objcopy_cmd=$(validate_cross_tool_path "$llvm_objcopy" "" "llvm-objcopy")
+    fi
+
+    if [ -z "$strip_cmd" ] && [ -n "$cache_strip" ]; then
+        strip_cmd=$(validate_cross_tool_path "$cache_strip" "" "strip")
+    fi
+    if [ -z "$objcopy_cmd" ] && [ -n "$cache_objcopy" ]; then
+        objcopy_cmd=$(validate_cross_tool_path "$cache_objcopy" "" "objcopy")
+    fi
+
+    if [ -n "$strip_cmd" ]; then
+        tools_status+="strip:$strip_cmd "
+    fi
+
+    if [ -n "$objcopy_cmd" ]; then
+        tools_status+="objcopy:$objcopy_cmd "
+    fi
+
     for tool in upx xz gzip; do
         if command -v "$tool" &> /dev/null; then
             tools_status="${tools_status}${tool}:${tool} "
         fi
     done
-    
+
     echo "$tools_status"
 }
 
@@ -189,6 +402,107 @@ get_target_config() {
             echo ""
             ;;
     esac
+}
+
+# 检查依赖是否已构建
+check_dependency_built() {
+    local target="$1"
+    local dependency="$2"
+    local dependency_dir="${OUTPUTS_DIR}/${dependency}/${target}"
+    
+    # 检查依赖目录是否存在且包含必要的文件
+    if [ -d "$dependency_dir" ]; then
+        case "$dependency" in
+            "rkmpp")
+                if [ -f "$dependency_dir/lib/pkgconfig/rockchip_mpp.pc" ]; then
+                    return 0
+                fi
+                ;;
+            "rkrga")
+                if [ -f "$dependency_dir/lib/pkgconfig/librga.pc" ]; then
+                    return 0
+                fi
+                ;;
+            "libdrm")
+                if [ -f "$dependency_dir/lib/pkgconfig/libdrm.pc" ]; then
+                    return 0
+                fi
+                ;;
+        esac
+    fi
+    
+    return 1
+}
+
+# 构建依赖
+build_dependency() {
+    local target="$1"
+    local dependency="$2"
+    
+    log_info "Building $dependency for target: $target"
+    
+    # 修正路径计算：使用脚本目录的父目录
+    local build_script="${SCRIPT_DIR}/../${dependency}/build.sh"
+    
+    # 检查构建脚本是否存在
+    if [ ! -f "$build_script" ]; then
+        log_error "Build script not found: $build_script"
+        return 1
+    fi
+    
+    # 检查脚本是否可执行
+    if [ ! -x "$build_script" ]; then
+        chmod +x "$build_script"
+    fi
+    
+    # 执行构建脚本，透传目标参数
+    log_info "Executing: $build_script $target"
+    if "$build_script" "$target"; then
+        log_success "$dependency build completed successfully for $target"
+        return 0
+    else
+        log_error "Failed to build $dependency for $target"
+        return 1
+    fi
+}
+
+# 检查并构建所有依赖
+check_and_build_dependencies() {
+    local target="$1"
+    
+    log_info "Checking dependencies for target: $target"
+    
+    local dependencies=("rkmpp" "rkrga" "libdrm")
+    local all_dependencies_built=true
+    
+    # 首先检查所有依赖是否都已构建
+    for dependency in "${dependencies[@]}"; do
+        if ! check_dependency_built "$target" "$dependency"; then
+            all_dependencies_built=false
+            break
+        fi
+    done
+    
+    # 如果所有依赖都已构建，直接返回
+    if [ "$all_dependencies_built" = true ]; then
+        log_success "All dependencies already built for $target"
+        return 0
+    fi
+    
+    # 构建缺失的依赖
+    for dependency in "${dependencies[@]}"; do
+        if ! check_dependency_built "$target" "$dependency"; then
+            log_warning "$dependency dependency not found for $target, building..."
+            if ! build_dependency "$target" "$dependency"; then
+                log_error "Failed to build $dependency, exiting"
+                exit 1
+            fi
+        else
+            log_success "$dependency dependency already built for $target"
+        fi
+    done
+    
+    log_success "All dependencies built successfully for $target"
 }
 
 # 设置依赖环境变量
@@ -342,8 +656,12 @@ get_cross_tools() {
             cross_prefix=""
             ;;
     esac
-    
-    echo "$cross_prefix"
+
+    if [ -z "$cross_prefix" ] && [ -n "$CROSS_COMPILE" ]; then
+        cross_prefix="$CROSS_COMPILE"
+    fi
+
+    echo "$(normalize_cross_prefix "$cross_prefix")"
 }
 
 # Android环境初始化
@@ -520,6 +838,12 @@ build_android_target() {
     
     log_info "Building Android target: $target_name..."
     
+    # 检查并构建依赖
+    if ! check_and_build_dependencies "$target_name"; then
+        log_error "Failed to build dependencies for $target_name"
+        return 1
+    fi
+    
     # 初始化Android环境
     init_android_env "$target_name"
     
@@ -596,15 +920,13 @@ execute_build_process() {
     # 配置
     log_info "Configuring FFmpeg for $target_name..."
     log_info "Configure command: $CONFIGURE_CMD"
-    
-    # 执行配置命令
-    eval "$CONFIGURE_CMD"
-    
-    if [ $? -ne 0 ]; then
+
+    if ! eval "$CONFIGURE_CMD"; then
         log_error "Configure failed for $target_name"
+        log_error "Check ffbuild/config.log for detailed error information"
         return 1
     fi
-    
+
     # 清理之前的构建
     make clean
     
@@ -630,12 +952,12 @@ execute_build_process() {
     
     # 压缩库文件
     if [[ "$target_name" == *"-android" ]]; then
-        compress_android_libraries "$output_dir" "$target_name"
+        compress_android_libraries "$output_dir" "$target_name" "$FFMPEG_SOURCE_DIR"
     else
         local cross_prefix
         cross_prefix=$(get_cross_tools "$target_name")
         local available_tools
-        available_tools=$(check_cross_compile_tools "$cross_prefix" "$target_name")
+        available_tools=$(check_cross_compile_tools "$cross_prefix" "$target_name" "$FFMPEG_SOURCE_DIR" "")
         compress_libraries "$output_dir" "$target_name" "$available_tools"
     fi
     
@@ -651,6 +973,12 @@ build_target() {
     local output_dir="$2"
     
     log_info "Building target: $target_name"
+    
+    # 检查并构建依赖
+    if ! check_and_build_dependencies "$target_name"; then
+        log_error "Failed to build dependencies for $target_name"
+        return 1
+    fi
     
     # 检查是否为Android目标
     if [[ "$target_name" == *"-android" ]]; then
@@ -767,14 +1095,14 @@ compress_single_library() {
     local compression_method="none"
     local compression_applied=false
     
-    log_info "  处理: $(basename "$lib_file") (${original_size} 字节)"
+    log_info "  处理: $(basename "$lib_file") (${original_size} 字节)" >&2
     
     # 使用 strip 工具移除符号表
     if [ -n "$strip_cmd" ]; then
         local backup_file="${lib_file}.backup"
         cp "$lib_file" "$backup_file"
         
-        log_info "    使用 $strip_cmd 移除符号表..."
+    log_info "    使用 $strip_cmd 移除符号表..." >&2
         
         # 根据文件类型使用不同的 strip 参数
         if [[ "$lib_file" == *.so* ]]; then
@@ -793,23 +1121,23 @@ compress_single_library() {
             rm -f "$backup_file"
             local strip_reduction
             strip_reduction=$(( (original_size - stripped_size) * 100 / original_size ))
-            log_success "      移除 ${strip_reduction}% 符号 ($strip_cmd)"
+            log_success "      移除 ${strip_reduction}% 符号 ($strip_cmd)" >&2
         else
             mv "$backup_file" "$lib_file"
-            log_info "      Strip 操作无效"
+            log_info "      Strip 操作无效" >&2
         fi
     fi
     
     # 使用 objcopy 进一步优化
     if [ -n "$objcopy_cmd" ] && [ "$compression_applied" = "true" ]; then
-        log_info "    使用 $objcopy_cmd 优化..."
+        log_info "    使用 $objcopy_cmd 优化..." >&2
         if "$objcopy_cmd" --remove-section=.comment --remove-section=.note "$lib_file" 2>/dev/null; then
             local objcopy_size
             objcopy_size=$(stat -c%s "$lib_file" 2>/dev/null || echo "$final_size")
             if [ "$objcopy_size" -lt "$final_size" ]; then
                 final_size=$objcopy_size
                 compression_method="${compression_method}+objcopy"
-                log_info "      objcopy 优化完成"
+                log_info "      objcopy 优化完成" >&2
             fi
         fi
     fi
@@ -817,9 +1145,9 @@ compress_single_library() {
     if [ "$compression_applied" = "true" ]; then
         local total_reduction
         total_reduction=$(( (original_size - final_size) * 100 / original_size ))
-        log_success "    最终: $original_size → $final_size 字节 (-${total_reduction}%, ${compression_method#none+})"
+        log_success "    最终: $original_size → $final_size 字节 (-${total_reduction}%, ${compression_method#none+})" >&2
     else
-        log_info "    未应用压缩"
+        log_info "    未应用压缩" >&2
     fi
     
     echo "$final_size:$compression_applied"
@@ -902,32 +1230,28 @@ compress_libraries() {
 compress_android_libraries() {
     local output_dir="$1"
     local target_name="$2"
-    
+    local build_dir="$3"
+
     log_info "压缩 Android 库文件: $target_name..."
-    
-    # Android下可用的工具
-    local strip_cmd=""
-    local available_tools=""
-    
-    # 检查Android NDK中的strip工具
-    case "$ANDROID_ABI" in
-        "arm64-v8a")
-            strip_cmd="$TOOLCHAIN/bin/aarch64-linux-android-strip"
+
+    local cross_prefix=""
+
+    case "$target_name" in
+        aarch64-linux-android)
+            cross_prefix="aarch64-linux-android-"
             ;;
-        "armeabi-v7a")
-            strip_cmd="$TOOLCHAIN/bin/arm-linux-androideabi-strip"
+        arm-linux-android)
+            cross_prefix="arm-linux-androideabi-"
+            ;;
+        *)
+            log_warning "未知的 Android 架构: $target_name，跳过压缩"
+            return 0
             ;;
     esac
-    
-    if [ -n "$strip_cmd" ] && command -v "$strip_cmd" &> /dev/null; then
-        available_tools="strip:$strip_cmd "
-        log_info "可用 Android 工具: $available_tools"
-    else
-        log_warning "未找到 Android strip 工具，跳过压缩"
-        return 0
-    fi
-    
-    # 使用通用压缩函数
+
+    local available_tools
+    available_tools=$(check_cross_compile_tools "$cross_prefix" "$target_name" "$build_dir" "")
+
     compress_libraries "$output_dir" "$target_name" "$available_tools"
 }
 

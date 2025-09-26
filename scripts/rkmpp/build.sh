@@ -85,9 +85,12 @@ check_tool_exists() {
 # 检查工具列表
 check_tools_list() {
     local cross_prefix="$1"
-    local tools=("$2")
+    local tools_string="$2"
     
     local tools_status=""
+    
+    # 将空格分隔的工具字符串转换为数组
+    read -ra tools <<< "$tools_string"
     
     for tool in "${tools[@]}"; do
         local tool_path
@@ -99,17 +102,236 @@ check_tools_list() {
     echo "$tools_status"
 }
 
+# 归一化交叉编译前缀，确保以连字符结尾
+normalize_cross_prefix() {
+    local prefix="$1"
+
+    if [ -z "$prefix" ]; then
+        echo ""
+        return 0
+    fi
+
+    # 去除所有空白字符
+    prefix="$(echo "$prefix" | tr -d '[:space:]')"
+    if [ -z "$prefix" ]; then
+        echo ""
+        return 0
+    fi
+
+    if [[ "$prefix" != *- ]]; then
+        prefix="${prefix}-"
+    fi
+
+    echo "$prefix"
+}
+
+# 校验工具路径是否存在并与预期前缀匹配
+validate_cross_tool_path() {
+    local candidate="$1"
+    local expected_prefix="$2"
+    local tool_name="$3"
+
+    if [ -z "$candidate" ]; then
+        echo ""
+        return 1
+    fi
+
+    # 如果是相对路径，尝试解析
+    if [[ "$candidate" != /* ]]; then
+        candidate="$(command -v "$candidate" 2>/dev/null || true)"
+    fi
+
+    if [ -z "$candidate" ] || [ ! -x "$candidate" ]; then
+        echo ""
+        return 1
+    fi
+
+    if [ -n "$expected_prefix" ]; then
+        local basename
+        basename="$(basename "$candidate")"
+        local expected_command="${expected_prefix}${tool_name}"
+        if [ "$basename" != "$expected_command" ]; then
+            echo ""
+            return 1
+        fi
+    fi
+
+    echo "$candidate"
+    return 0
+}
+
+# 在 PATH 中查找交叉编译工具
+find_cross_tool_in_path() {
+    local cross_prefix="$1"
+    local tool_name="$2"
+
+    if [ -z "$cross_prefix" ]; then
+        echo ""
+        return 1
+    fi
+
+    local resolved
+    resolved="$(command -v "${cross_prefix}${tool_name}" 2>/dev/null || true)"
+    resolved="$(validate_cross_tool_path "$resolved" "$cross_prefix" "$tool_name")"
+
+    if [ -n "$resolved" ]; then
+        echo "$resolved"
+        return 0
+    fi
+
+    echo ""
+    return 1
+}
+
+# 在候选目录中查找交叉编译工具
+find_cross_tool_in_dirs() {
+    local cross_prefix="$1"
+    local tool_name="$2"
+    shift 2
+
+    if [ -z "$cross_prefix" ]; then
+        echo ""
+        return 1
+    fi
+
+    local candidate
+    for dir in "$@"; do
+        [ -z "$dir" ] && continue
+        candidate="${dir%/}/${cross_prefix}${tool_name}"
+        if [ -x "$candidate" ]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+
+    echo ""
+    return 1
+}
+
+find_tool_in_dirs() {
+    local tool_name="$1"
+    shift
+
+    local candidate
+    for dir in "$@"; do
+        [ -z "$dir" ] && continue
+        candidate="${dir%/}/${tool_name}"
+        if [ -x "$candidate" ]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+
+    echo ""
+    return 1
+}
+
 # 检查交叉编译工具是否可用
 check_cross_compile_tools() {
     local cross_prefix="$1"
     local target_name="$2"
+    local build_dir="$3"
+    local toolchain_file="$4"
     
     log_info "检查 $target_name 的交叉编译工具 (前缀: ${cross_prefix:-'系统默认'})..."
     
     local tools_status=""
+    local strip_cmd=""
+    local objcopy_cmd=""
+    local cmake_cache=""
+    local compiler_dir=""
+
+    # 从 CMakeCache.txt 中提取工具路径
+    if [ -n "$build_dir" ]; then
+        cmake_cache="${build_dir%/}/CMakeCache.txt"
+        if [ -f "$cmake_cache" ]; then
+            local cache_strip
+            cache_strip=$(sed -n 's/^CMAKE_STRIP:FILEPATH=//p' "$cmake_cache" | head -n1)
+            strip_cmd=$(validate_cross_tool_path "$cache_strip" "$cross_prefix" "strip")
+
+            local cache_objcopy
+            cache_objcopy=$(sed -n 's/^CMAKE_OBJCOPY:FILEPATH=//p' "$cmake_cache" | head -n1)
+            objcopy_cmd=$(validate_cross_tool_path "$cache_objcopy" "$cross_prefix" "objcopy")
+
+            local cache_compiler
+            cache_compiler=$(sed -n 's/^CMAKE_C_COMPILER:FILEPATH=//p' "$cmake_cache" | head -n1)
+            if [ -n "$cache_compiler" ]; then
+                compiler_dir="$(dirname "$cache_compiler")"
+            fi
+        fi
+    fi
+
+    # 构建候选目录列表
+    local candidate_dirs=()
+    [ -n "$compiler_dir" ] && candidate_dirs+=("$compiler_dir")
+    if [ -n "$TOOLCHAIN_ROOT_DIR" ]; then
+        candidate_dirs+=("$TOOLCHAIN_ROOT_DIR/bin" "$TOOLCHAIN_ROOT_DIR/usr/bin")
+    fi
+    if [ -n "$TOOLCHAIN" ]; then
+        candidate_dirs+=("$TOOLCHAIN/bin" "$TOOLCHAIN")
+    fi
+    if [ -n "$TOOLCHAIN_BIN_DIR" ]; then
+        candidate_dirs+=("$TOOLCHAIN_BIN_DIR")
+    fi
+    if [ -n "$toolchain_file" ]; then
+        local tf_dir
+        tf_dir="$(dirname "$toolchain_file")"
+        candidate_dirs+=("$tf_dir" "$tf_dir/bin" "$(dirname "$tf_dir")/bin")
+    fi
+
+    # 允许通过环境变量 CROSS_COMPILE 提供后备前缀
+    if [ -z "$cross_prefix" ] && [ -n "$CROSS_COMPILE" ]; then
+        cross_prefix="$(normalize_cross_prefix "$CROSS_COMPILE")"
+    fi
+
+    # 综合搜索 strip 与 objcopy
+    if [ -z "$strip_cmd" ]; then
+        strip_cmd=$(find_cross_tool_in_path "$cross_prefix" "strip")
+    fi
+    if [ -z "$objcopy_cmd" ]; then
+        objcopy_cmd=$(find_cross_tool_in_path "$cross_prefix" "objcopy")
+    fi
+
+    if [ -z "$strip_cmd" ]; then
+        strip_cmd=$(find_cross_tool_in_dirs "$cross_prefix" "strip" "${candidate_dirs[@]}")
+    fi
+    if [ -z "$objcopy_cmd" ]; then
+        objcopy_cmd=$(find_cross_tool_in_dirs "$cross_prefix" "objcopy" "${candidate_dirs[@]}")
+    fi
+
+    if [ -z "$strip_cmd" ]; then
+        local llvm_strip
+        llvm_strip=$(command -v llvm-strip 2>/dev/null || true)
+        if [ -z "$llvm_strip" ]; then
+            llvm_strip=$(find_tool_in_dirs "llvm-strip" "${candidate_dirs[@]}")
+        fi
+        strip_cmd=$(validate_cross_tool_path "$llvm_strip" "" "llvm-strip")
+    fi
+
+    if [ -z "$objcopy_cmd" ]; then
+        local llvm_objcopy
+        llvm_objcopy=$(command -v llvm-objcopy 2>/dev/null || true)
+        if [ -z "$llvm_objcopy" ]; then
+            llvm_objcopy=$(find_tool_in_dirs "llvm-objcopy" "${candidate_dirs[@]}")
+        fi
+        objcopy_cmd=$(validate_cross_tool_path "$llvm_objcopy" "" "llvm-objcopy")
+    fi
+
+    # 如果 CMakeCache 中的工具未匹配前缀，允许作为最终兜底
+    if [ -z "$strip_cmd" ]; then
+        strip_cmd=$(validate_cross_tool_path "$cache_strip" "" "strip")
+    fi
+    if [ -z "$objcopy_cmd" ]; then
+        objcopy_cmd=$(validate_cross_tool_path "$cache_objcopy" "" "objcopy")
+    fi
     
-    # 检查编译工具
-    tools_status+=$(check_tools_list "$cross_prefix" "strip objcopy")
+    if [ -n "$strip_cmd" ]; then
+        tools_status+="strip:$strip_cmd "
+    fi
+
+    if [ -n "$objcopy_cmd" ]; then
+        tools_status+="objcopy:$objcopy_cmd "
+    fi
     
     # 检查通用压缩工具
     for tool in upx xz gzip; do
@@ -177,12 +399,13 @@ get_cross_compile_prefix() {
     cross_compile_line=$(grep -E "set\s*\(\s*CROSS_COMPILE\s+" "$toolchain_file" | head -1)
     
     if [ -n "$cross_compile_line" ]; then
-        # 使用 sed 提取前缀，去掉末尾的 '-'
+        # 使用 sed 提取前缀，支持带引号和不带引号的格式
         local prefix
-        prefix=$(echo "$cross_compile_line" | sed -E 's/.*set\s*\(\s*CROSS_COMPILE\s+([a-zA-Z0-9-]+)-\s*\).*/\1/')
+        # 匹配格式: set( CROSS_COMPILE aarch64-linux-gnu- ) 或 set(CROSS_COMPILE "aarch64-linux-gnu-")
+        prefix=$(echo "$cross_compile_line" | sed -E 's/.*set\s*\(\s*CROSS_COMPILE\s+["]?([a-zA-Z0-9_-]+)-["]?\s*\).*/\1/')
         
         if [ -n "$prefix" ] && [ "$prefix" != "$cross_compile_line" ]; then
-            echo "${prefix}-"
+            normalize_cross_prefix "$prefix"
         else
             echo ""
         fi
@@ -267,12 +490,15 @@ build_target_common() {
     
     # 压缩库文件
     if [ "$is_android" = "true" ]; then
-        compress_android_libraries "$output_dir" "$target_name"
+        compress_android_libraries "$output_dir" "$target_name" "$build_dir"
     else
         local cross_prefix
         cross_prefix=$(get_cross_compile_prefix "$toolchain_file")
+        if [ -z "$cross_prefix" ] && [ -n "$CROSS_COMPILE" ]; then
+            cross_prefix=$(normalize_cross_prefix "$CROSS_COMPILE")
+        fi
         local available_tools
-        available_tools=$(check_cross_compile_tools "$cross_prefix" "$target_name")
+        available_tools=$(check_cross_compile_tools "$cross_prefix" "$target_name" "$build_dir" "$toolchain_file")
         compress_libraries "$output_dir" "$target_name" "$available_tools"
     fi
     
@@ -291,32 +517,28 @@ build_android_target() {
 compress_android_libraries() {
     local output_dir="$1"
     local target_name="$2"
-    
+    local build_dir="$3"
+
     log_info "压缩 Android 库文件: $target_name..."
-    
-    # Android下可用的工具
-    local strip_cmd=""
-    local available_tools=""
-    
-    # 检查Android NDK中的strip工具
-    case "$ANDROID_ABI" in
-        "arm64-v8a")
-            strip_cmd="$TOOLCHAIN/bin/aarch64-linux-android-strip"
+
+    local cross_prefix=""
+
+    case "$target_name" in
+        aarch64-linux-android)
+            cross_prefix="aarch64-linux-android-"
             ;;
-        "armeabi-v7a")
-            strip_cmd="$TOOLCHAIN/bin/arm-linux-androideabi-strip"
+        arm-linux-android)
+            cross_prefix="arm-linux-androideabi-"
+            ;;
+        *)
+            log_warning "未知的 Android 目标: $target_name，跳过压缩"
+            return 0
             ;;
     esac
-    
-    if [ -n "$strip_cmd" ] && command -v "$strip_cmd" &> /dev/null; then
-        available_tools="strip:$strip_cmd "
-        log_info "可用 Android 工具: $available_tools"
-    else
-        log_warning "未找到 Android strip 工具，跳过压缩"
-        return 0
-    fi
-    
-    # 使用通用压缩函数
+
+    local available_tools
+    available_tools=$(check_cross_compile_tools "$cross_prefix" "$target_name" "$build_dir" "")
+
     compress_libraries "$output_dir" "$target_name" "$available_tools"
 }
 
@@ -341,14 +563,14 @@ compress_single_library() {
     local compression_method="none"
     local compression_applied=false
     
-    log_info "  处理: $(basename "$lib_file") (${original_size} 字节)"
+    log_info "  处理: $(basename "$lib_file") (${original_size} 字节)" >&2
     
     # 使用 strip 工具移除符号表
     if [ -n "$strip_cmd" ]; then
         local backup_file="${lib_file}.backup"
         cp "$lib_file" "$backup_file"
         
-        log_info "    使用 $strip_cmd 移除符号表..."
+        log_info "    使用 $strip_cmd 移除符号表..." >&2
         
         # 根据文件类型使用不同的 strip 参数
         if [[ "$lib_file" == *.so* ]]; then
@@ -367,23 +589,23 @@ compress_single_library() {
             rm -f "$backup_file"
             local strip_reduction
             strip_reduction=$(( (original_size - stripped_size) * 100 / original_size ))
-            log_success "      移除 ${strip_reduction}% 符号 ($strip_cmd)"
+            log_success "      移除 ${strip_reduction}% 符号 ($strip_cmd)" >&2
         else
             mv "$backup_file" "$lib_file"
-            log_info "      Strip 操作无效"
+            log_info "      Strip 操作无效" >&2
         fi
     fi
     
     # 使用 objcopy 进一步优化
     if [ -n "$objcopy_cmd" ] && [ "$compression_applied" = "true" ]; then
-        log_info "    使用 $objcopy_cmd 优化..."
+        log_info "    使用 $objcopy_cmd 优化..." >&2
         if "$objcopy_cmd" --remove-section=.comment --remove-section=.note "$lib_file" 2>/dev/null; then
             local objcopy_size
             objcopy_size=$(stat -c%s "$lib_file" 2>/dev/null || echo "$final_size")
             if [ "$objcopy_size" -lt "$final_size" ]; then
                 final_size=$objcopy_size
                 compression_method="${compression_method}+objcopy"
-                log_info "      objcopy 优化完成"
+                log_info "      objcopy 优化完成" >&2
             fi
         fi
     fi
@@ -391,9 +613,9 @@ compress_single_library() {
     if [ "$compression_applied" = "true" ]; then
         local total_reduction
         total_reduction=$(( (original_size - final_size) * 100 / original_size ))
-        log_success "    最终: $original_size → $final_size 字节 (-${total_reduction}%, ${compression_method#none+})"
+        log_success "    最终: $original_size → $final_size 字节 (-${total_reduction}%, ${compression_method#none+})" >&2
     else
-        log_info "    未应用压缩"
+        log_info "    未应用压缩" >&2
     fi
     
     echo "$final_size:$compression_applied"
@@ -534,7 +756,7 @@ get_target_config() {
             echo "aarch64-linux-gnu:${TOOLCHAIN_DIR}/aarch64-linux-gnu.cmake:${RKMPP_OUTPUT_DIR}/aarch64-linux-gnu"
             ;;
         "arm-linux-musleabihf")
-            echo "arm-linux-musleabihf:${TOOLCHAIN_DIR}/arm-none-linux-musleabihf.cmake:${RKMPP_OUTPUT_DIR}/arm-linux-musleabihf"
+            echo "arm-linux-musleabihf:${TOOLCHAIN_DIR}/arm-linux-musleabihf.cmake:${RKMPP_OUTPUT_DIR}/arm-linux-musleabihf"
             ;;
         "riscv64-linux-gnu")
             echo "riscv64-linux-gnu:${TOOLCHAIN_DIR}/riscv64-linux-gnu.cmake:${RKMPP_OUTPUT_DIR}/riscv64-linux-gnu"
@@ -576,7 +798,7 @@ get_default_build_targets() {
         # 所有目标的配置
         echo "arm-linux-gnueabihf:${TOOLCHAIN_DIR}/arm-linux-gnueabihf.cmake:${RKMPP_OUTPUT_DIR}/arm-linux-gnueabihf"
         echo "aarch64-linux-gnu:${TOOLCHAIN_DIR}/aarch64-linux-gnu.cmake:${RKMPP_OUTPUT_DIR}/aarch64-linux-gnu"
-        echo "arm-linux-musleabihf:${TOOLCHAIN_DIR}/arm-none-linux-musleabihf.cmake:${RKMPP_OUTPUT_DIR}/arm-linux-musleabihf"
+        echo "arm-linux-musleabihf:${TOOLCHAIN_DIR}/arm-linux-musleabihf.cmake:${RKMPP_OUTPUT_DIR}/arm-linux-musleabihf"
         echo "riscv64-linux-gnu:${TOOLCHAIN_DIR}/riscv64-linux-gnu.cmake:${RKMPP_OUTPUT_DIR}/riscv64-linux-gnu"
         echo "riscv64-linux-musl:${TOOLCHAIN_DIR}/riscv64-linux-musl.cmake:${RKMPP_OUTPUT_DIR}/riscv64-linux-musl"
         echo "aarch64-linux-musl:${TOOLCHAIN_DIR}/aarch64-linux-musl.cmake:${RKMPP_OUTPUT_DIR}/aarch64-linux-musl"

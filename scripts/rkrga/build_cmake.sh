@@ -574,10 +574,10 @@ get_default_build_targets() {
         # 所有目标的配置
         echo "arm-linux-gnueabihf:${TOOLCHAIN_DIR}/arm-linux-gnueabihf.cmake:${RKRGA_OUTPUT_DIR}/arm-linux-gnueabihf"
         echo "aarch64-linux-gnu:${TOOLCHAIN_DIR}/aarch64-linux-gnu.cmake:${RKRGA_OUTPUT_DIR}/aarch64-linux-gnu"
-        echo "riscv64-linux-gnu:${TOOLCHAIN_DIR}/riscv64-unknown-linux-gnu.cmake:${RKRGA_OUTPUT_DIR}/riscv64-linux-gnu"
-        echo "arm-linux-musleabihf:${TOOLCHAIN_DIR}/arm-none-linux-musleabihf.cmake:${RKRGA_OUTPUT_DIR}/arm-linux-musleabihf"
-        echo "riscv64-linux-musl:${TOOLCHAIN_DIR}/riscv64-unknown-linux-musl.cmake:${RKRGA_OUTPUT_DIR}/riscv64-linux-musl"
-        echo "aarch64-linux-musl:${TOOLCHAIN_DIR}/aarch64-none-linux-musl.cmake:${RKRGA_OUTPUT_DIR}/aarch64-linux-musl"
+        echo "riscv64-linux-gnu:${TOOLCHAIN_DIR}/riscv64-linux-gnu.cmake:${RKRGA_OUTPUT_DIR}/riscv64-linux-gnu"
+        echo "arm-linux-musleabihf:${TOOLCHAIN_DIR}/arm-linux-musleabihf.cmake:${RKRGA_OUTPUT_DIR}/arm-linux-musleabihf"
+        echo "riscv64-linux-musl:${TOOLCHAIN_DIR}/riscv64-linux-musl.cmake:${RKRGA_OUTPUT_DIR}/riscv64-linux-musl"
+        echo "aarch64-linux-musl:${TOOLCHAIN_DIR}/aarch64-linux-musl.cmake:${RKRGA_OUTPUT_DIR}/aarch64-linux-musl"
         echo "aarch64-linux-android:android:${RKRGA_OUTPUT_DIR}/aarch64-linux-android"
         echo "arm-linux-android:android:${RKRGA_OUTPUT_DIR}/arm-linux-android"
         echo "x86_64-linux-gnu:${TOOLCHAIN_DIR}/x86_64-linux-gnu.cmake:${RKRGA_OUTPUT_DIR}/x86_64-linux-gnu"
@@ -617,16 +617,16 @@ get_target_config() {
             echo "aarch64-linux-gnu:${TOOLCHAIN_DIR}/aarch64-linux-gnu.cmake:${RKRGA_OUTPUT_DIR}/aarch64-linux-gnu"
             ;;
         "arm-linux-musleabihf")
-            echo "arm-linux-musleabihf:${TOOLCHAIN_DIR}/arm-none-linux-musleabihf.cmake:${RKRGA_OUTPUT_DIR}/arm-linux-musleabihf"
+            echo "arm-linux-musleabihf:${TOOLCHAIN_DIR}/arm-linux-musleabihf.cmake:${RKRGA_OUTPUT_DIR}/arm-linux-musleabihf"
             ;;
         "riscv64-linux-gnu")
-            echo "riscv64-linux-gnu:${TOOLCHAIN_DIR}/riscv64-unknown-linux-gnu.cmake:${RKRGA_OUTPUT_DIR}/riscv64-linux-gnu"
+            echo "riscv64-linux-gnu:${TOOLCHAIN_DIR}/riscv64-linux-gnu.cmake:${RKRGA_OUTPUT_DIR}/riscv64-linux-gnu"
             ;;
         "riscv64-linux-musl")
-            echo "riscv64-linux-musl:${TOOLCHAIN_DIR}/riscv64-unknown-linux-musl.cmake:${RKRGA_OUTPUT_DIR}/riscv64-linux-musl"
+            echo "riscv64-linux-musl:${TOOLCHAIN_DIR}/riscv64-linux-musl.cmake:${RKRGA_OUTPUT_DIR}/riscv64-linux-musl"
             ;;
         "aarch64-linux-musl")
-            echo "aarch64-linux-musl:${TOOLCHAIN_DIR}/aarch64-none-linux-musl.cmake:${RKRGA_OUTPUT_DIR}/aarch64-linux-musl"
+            echo "aarch64-linux-musl:${TOOLCHAIN_DIR}/aarch64-linux-musl.cmake:${RKRGA_OUTPUT_DIR}/aarch64-linux-musl"
             ;;
         "aarch64-linux-android")
             echo "aarch64-linux-android:android:${RKRGA_OUTPUT_DIR}/aarch64-linux-android"
