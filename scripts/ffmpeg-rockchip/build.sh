@@ -26,6 +26,14 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+# 记录初始依赖环境变量，便于在不同目标之间恢复
+ORIGINAL_PKG_CONFIG_PATH="${PKG_CONFIG_PATH:-}"
+ORIGINAL_CFLAGS="${CFLAGS:-}"
+ORIGINAL_LDFLAGS="${LDFLAGS:-}"
+ORIGINAL_RKMPP_PATH="${RKMPP_PATH:-}"
+ORIGINAL_RKRGA_PATH="${RKRGA_PATH:-}"
+ORIGINAL_LIBDRM_PATH="${LIBDRM_PATH:-}"
+
 log_info() {
     echo -e "${BLUE}[INFO]${NC} $1"
 }
@@ -466,10 +474,51 @@ build_dependency() {
     fi
 }
 
+# 恢复依赖相关环境变量，避免不同目标之间交叉污染
+reset_dependency_env() {
+    if [ -n "$ORIGINAL_PKG_CONFIG_PATH" ]; then
+        export PKG_CONFIG_PATH="$ORIGINAL_PKG_CONFIG_PATH"
+    else
+        unset PKG_CONFIG_PATH
+    fi
+
+    if [ -n "$ORIGINAL_CFLAGS" ]; then
+        export CFLAGS="$ORIGINAL_CFLAGS"
+    else
+        unset CFLAGS
+    fi
+
+    if [ -n "$ORIGINAL_LDFLAGS" ]; then
+        export LDFLAGS="$ORIGINAL_LDFLAGS"
+    else
+        unset LDFLAGS
+    fi
+
+    if [ -n "$ORIGINAL_RKMPP_PATH" ]; then
+        export RKMPP_PATH="$ORIGINAL_RKMPP_PATH"
+    else
+        unset RKMPP_PATH
+    fi
+
+    if [ -n "$ORIGINAL_RKRGA_PATH" ]; then
+        export RKRGA_PATH="$ORIGINAL_RKRGA_PATH"
+    else
+        unset RKRGA_PATH
+    fi
+
+    if [ -n "$ORIGINAL_LIBDRM_PATH" ]; then
+        export LIBDRM_PATH="$ORIGINAL_LIBDRM_PATH"
+    else
+        unset LIBDRM_PATH
+    fi
+}
+
 # 检查并构建所有依赖
 check_and_build_dependencies() {
     local target="$1"
     
+    reset_dependency_env
+
     log_info "Checking dependencies for target: $target"
     
     local dependencies=("rkmpp" "rkrga" "libdrm")
@@ -600,9 +649,26 @@ setup_dependency_env() {
     export RKMPP_PATH="$rkmpp_dir"
     export RKRGA_PATH="$rkrga_dir"
     export LIBDRM_PATH="$libdrm_dir"
-    export PKG_CONFIG_PATH="${RKMPP_PATH}/lib/pkgconfig:${RKRGA_PATH}/lib/pkgconfig:${LIBDRM_PATH}/lib/pkgconfig:${PKG_CONFIG_PATH}"
-    export CFLAGS="-I${RKMPP_PATH}/include -I${RKRGA_PATH}/include -I${LIBDRM_PATH}/include -DHAVE_SYSCTL=0 ${CFLAGS}"
-    export LDFLAGS="-L${RKMPP_PATH}/lib -L${RKRGA_PATH}/lib -L${LIBDRM_PATH}/lib ${LDFLAGS}"
+    local pkg_paths="${RKMPP_PATH}/lib/pkgconfig:${RKRGA_PATH}/lib/pkgconfig:${LIBDRM_PATH}/lib/pkgconfig"
+    if [ -n "$PKG_CONFIG_PATH" ]; then
+        export PKG_CONFIG_PATH="${pkg_paths}:${PKG_CONFIG_PATH}"
+    else
+        export PKG_CONFIG_PATH="$pkg_paths"
+    fi
+
+    local extra_cflags="-I${RKMPP_PATH}/include -I${RKRGA_PATH}/include -I${LIBDRM_PATH}/include -DHAVE_SYSCTL=0"
+    if [ -n "$CFLAGS" ]; then
+        export CFLAGS="${extra_cflags} ${CFLAGS}"
+    else
+        export CFLAGS="$extra_cflags"
+    fi
+
+    local extra_ldflags="-L${RKMPP_PATH}/lib -L${RKRGA_PATH}/lib -L${LIBDRM_PATH}/lib"
+    if [ -n "$LDFLAGS" ]; then
+        export LDFLAGS="${extra_ldflags} ${LDFLAGS}"
+    else
+        export LDFLAGS="$extra_ldflags"
+    fi
     
     log_success "Dependency environment variables set"
     log_info "  RKMPP_PATH: $RKMPP_PATH"
@@ -971,6 +1037,10 @@ execute_build_process() {
 build_target() {
     local target_name="$1"
     local output_dir="$2"
+    local build_status=0
+
+    trap 'reset_dependency_env' RETURN
+    reset_dependency_env
     
     log_info "Building target: $target_name"
     
@@ -1025,10 +1095,12 @@ build_target() {
     
     # 使用统一的构建执行函数
     if execute_build_process "$target_name" "$output_dir" "$ARCH" "$TARGET_OS" "$CC" "$CXX" "$AR" "$RANLIB" "$cross_prefix" "$CFLAGS" "$LDFLAGS"; then
-        return 0
+        build_status=0
     else
-        return 1
+        build_status=1
     fi
+
+    return $build_status
 }
 
 # 获取默认构建目标
