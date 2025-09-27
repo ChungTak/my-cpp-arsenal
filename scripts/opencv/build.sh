@@ -14,12 +14,13 @@ OUTPUTS_DIR="${WORKSPACE_DIR}/outputs"
 OPENCV_OUTPUT_DIR="${OUTPUTS_DIR}/opencv"
 OPENCV_SOURCE_DIR="${SOURCES_DIR}/opencv"
 TEMP_DIR="${WORKSPACE_DIR}/.tmp/opencv"
-OPENCV_VERSION="${OPENCV_VERSION_OVERRIDE:-4.5.5}"
+OPENCV_VERSION="4.5.5"
 
 # 默认构建类型配置
 source "${SCRIPT_DIR}/../common.sh"
 
 reset_build_type_state
+VERSION_OVERRIDE=""
 PARSED_TARGET=""
 
 # 限制默认编译目标
@@ -427,6 +428,15 @@ parse_arguments() {
                 shift
                 continue
                 ;;
+            --version)
+                if [ -z "${2:-}" ]; then
+                    log_error "--version requires a value"
+                    exit 1
+                fi
+                VERSION_OVERRIDE="$2"
+                shift 2
+                continue
+                ;;
             Debug|debug|Release|release)
                 log_error "请使用 --build_type 参数设置构建类型"
                 exit 1
@@ -558,6 +568,9 @@ build_multiple_targets() {
 main() {
     local target_to_build="${1:-$PARSED_TARGET}"
     
+    # 设置版本号
+    OPENCV_VERSION="${VERSION_OVERRIDE:-4.5.5}"
+    
     log_info "开始 OPENCV 构建过程..."
     log_info "当前构建类型: $BUILD_TYPE"
     
@@ -669,6 +682,7 @@ Options:
     -c, --clean                       Clean build directories only
     --clean-all                       Clean all (sources and outputs)
     --build_type {Debug|Release}      Specify CMake build type (default: Release)
+    --version VERSION                 Specify OpenCV version (default: 4.5.5)
 
 Environment Variables:
     TOOLCHAIN_ROOT_DIR    Path to cross-compilation toolchain (optional)
@@ -682,6 +696,7 @@ Examples:
     ./${script_name} --clean                        # Clean build directories
     ./${script_name} --clean-all                    # Clean everything
     ./${script_name} --build_type Debug aarch64-linux-gnu  # Debug build for ARM64
+    ./${script_name} --version 4.8.0 aarch64-linux-gnu  # Build specific version
 EOF
 }
 
