@@ -1,868 +1,462 @@
 #!/bin/bash
 
+set -euo pipefail
+
 # libdrm 构建脚本
 # 支持多种交叉编译工具链编译libdrm库
 
-set -e
-
-# 脚本目录
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-TOOLCHAIN_DIR="${WORKSPACE_DIR}/toolchain"
+PROJECT_ROOT_DIR="$WORKSPACE_DIR"
 SOURCES_DIR="${WORKSPACE_DIR}/sources"
 OUTPUTS_DIR="${WORKSPACE_DIR}/outputs"
 LIBDRM_OUTPUT_DIR="${OUTPUTS_DIR}/libdrm"
-
-# libdrm 版本和源码目录
-LIBDRM_VERSION="2.4.125"
 LIBDRM_SOURCE_DIR="${SOURCES_DIR}/libdrm"
-PROJECT_ROOT_DIR="${SCRIPT_DIR}"
+TOOLCHAIN_DIR="${WORKSPACE_DIR}/toolchain"
+TEMP_DIR="${WORKSPACE_DIR}/.tmp/libdrm"
 
-# 默认构建类型配置
+mkdir -p "$SOURCES_DIR" "$OUTPUTS_DIR" "$LIBDRM_OUTPUT_DIR" "$TEMP_DIR"
+
 source "${SCRIPT_DIR}/../common.sh"
 
 reset_build_type_state
 PARSED_TARGET=""
 
-# 限制默认编译目标
+# 限制默认构建目标
 _DEFAULT_BUILD_TARGETS="aarch64-linux-gnu,arm-linux-gnueabihf,aarch64-linux-android,arm-linux-android"
 
-# 获取交叉编译前缀
-get_cross_compile_prefix() {
-    local target_name="$1"
-    
-    # 首先检查环境变量
-    if [ -n "$TOOLCHAIN_NAME" ]; then
-        local prefix="$TOOLCHAIN_NAME"
-        # 确保以 '-' 结尾
-        if [[ "$prefix" != *"-" ]]; then
-            prefix="${prefix}-"
-        fi
-        echo "$prefix"
-        return 0
+LIBDRM_VERSION="unknown"
+
+ALL_KNOWN_TARGETS=(
+    arm-linux-gnueabihf
+    aarch64-linux-gnu
+    arm-linux-musleabihf
+    aarch64-linux-musl
+    riscv64-linux-gnu
+    riscv64-linux-musl
+    x86_64-linux-gnu
+    x86_64-windows-gnu
+    x86_64-macos
+    aarch64-macos
+    aarch64-linux-android
+    arm-linux-android
+)
+
+declare -A TARGET_CONFIGS=(
+    ["arm-linux-gnueabihf"]="arm-linux-gnueabihf:linux:${LIBDRM_OUTPUT_DIR}/arm-linux-gnueabihf:arm-linux-gnueabihf-:ARM"
+    ["aarch64-linux-gnu"]="aarch64-linux-gnu:linux:${LIBDRM_OUTPUT_DIR}/aarch64-linux-gnu:aarch64-linux-gnu-:AArch64"
+    ["arm-linux-musleabihf"]="arm-linux-musleabihf:linux:${LIBDRM_OUTPUT_DIR}/arm-linux-musleabihf:arm-linux-musleabihf-:ARM"
+    ["aarch64-linux-musl"]="aarch64-linux-musl:linux:${LIBDRM_OUTPUT_DIR}/aarch64-linux-musl:aarch64-linux-musl-:AArch64"
+    ["riscv64-linux-gnu"]="riscv64-linux-gnu:linux:${LIBDRM_OUTPUT_DIR}/riscv64-linux-gnu:riscv64-linux-gnu-:RISC-V"
+    ["riscv64-linux-musl"]="riscv64-linux-musl:linux:${LIBDRM_OUTPUT_DIR}/riscv64-linux-musl:riscv64-linux-musl-:RISC-V"
+    ["x86_64-linux-gnu"]="x86_64-linux-gnu:native:${LIBDRM_OUTPUT_DIR}/x86_64-linux-gnu::x86_64"
+    ["x86_64-windows-gnu"]="x86_64-windows-gnu:linux:${LIBDRM_OUTPUT_DIR}/x86_64-windows-gnu:x86_64-w64-mingw32-:x86_64"
+    ["x86_64-macos"]="x86_64-macos:macos:${LIBDRM_OUTPUT_DIR}/x86_64-macos::x86_64"
+    ["aarch64-macos"]="aarch64-macos:macos:${LIBDRM_OUTPUT_DIR}/aarch64-macos::AArch64"
+    ["aarch64-linux-android"]="aarch64-linux-android:android:${LIBDRM_OUTPUT_DIR}/aarch64-linux-android:aarch64-linux-android-:AArch64"
+    ["arm-linux-android"]="arm-linux-android:android:${LIBDRM_OUTPUT_DIR}/arm-linux-android:arm-linux-androideabi-:ARM"
+)
+
+detect_libdrm_version() {
+    local meson_file="${LIBDRM_SOURCE_DIR}/meson.build"
+    local version="unknown"
+
+    if [ -f "$meson_file" ]; then
+        version=$(grep -E "version\s*:\s*'" "$meson_file" | head -n1 | sed -E "s/.*version\s*:\s*'([^']+)'.*/\1/")
+        [ -n "$version" ] || version="unknown"
     fi
-    
-    # 根据目标名称设置默认前缀
-    case "$target_name" in
-        "arm-linux-gnueabihf")
-            echo "arm-linux-gnueabihf-"
-            ;;
-        "aarch64-linux-gnu")
-            echo "aarch64-linux-gnu-"
-            ;;
-        "riscv64-linux-gnu")
-            echo "riscv64-linux-gnu-"
-            ;;
-        "aarch64-linux-musl")
-            echo "aarch64-linux-musl-"
-            ;;
-        "arm-linux-musleabihf")
-            echo "arm-linux-musleabihf-"
-            ;;
-        "riscv64-linux-musl")
-            echo "riscv64-linux-musl-"
-            ;;
-        "x86_64-linux-gnu")
-            echo "x86_64-linux-gnu-"
-            ;;
-        "x86_64-windows-gnu")
-            echo "x86_64-w64-mingw32-"
-            ;;
-        "x86_64-macos")
-            echo "x86_64-apple-darwin-"
-            ;;
-        "aarch64-macos")
-            echo "aarch64-apple-darwin-"
-            ;;
-        "aarch64-linux-android")
-            echo "aarch64-linux-android-"
-            ;;
-        "arm-linux-android")
-            echo "arm-linux-androideabi-"
-            ;;
-        *)
-            echo ""
-            ;;
-    esac
+
+    echo "$version"
 }
 
-# 检查必要的工具
-check_tools() {
-    local tools=("meson" "ninja" "wget")
-    for tool in "${tools[@]}"; do
-        if ! command -v "$tool" &> /dev/null; then
-            log_error "Missing required tool: $tool"
-            exit 1
-        fi
-    done
-}
-
-# 应用 meson 时钟偏差补丁
-apply_meson_clockskew_patch() {
-    log_info "Applying meson clockskew patch..."
-    
-    local patch_script="${WORKSPACE_DIR}/patches/patch_meson_clockskew.py"
-    
-    if [ ! -f "$patch_script" ]; then
-        log_warning "Meson clockskew patch script not found: $patch_script"
-        log_warning "Compilation may fail due to clock skew issues"
-        return 0
-    fi
-    
-    # 运行补丁脚本
-    if python3 "$patch_script"; then
-        log_success "Meson clockskew patch applied successfully"
-    else
-        log_warning "Failed to apply meson clockskew patch"
-        log_warning "Compilation may fail due to clock skew issues"
-    fi
-}
-
-# 下载libdrm源码
 download_libdrm() {
-    log_info "Checking libdrm source..."
-    
-    # 创建sources目录
-    mkdir -p "${SOURCES_DIR}"
-    
-    # 如果目录已存在且包含meson.build，跳过下载
-    if [ -d "${LIBDRM_SOURCE_DIR}" ] && [ -f "${LIBDRM_SOURCE_DIR}/meson.build" ]; then
-        log_success "libdrm source already exists, skipping download"
-        return 0
-    fi
-    
-    # 如果目录存在但不完整，先删除
-    if [ -d "${LIBDRM_SOURCE_DIR}" ]; then
-        log_warning "Removing incomplete libdrm directory"
-        rm -rf "${LIBDRM_SOURCE_DIR}"
-    fi
-    
-    # 下载源码包
-    log_info "Downloading libdrm-${LIBDRM_VERSION}..."
-    local archive_file="${SOURCES_DIR}/libdrm-${LIBDRM_VERSION}.tar.xz"
-    
-    wget -O "$archive_file" "https://dri.freedesktop.org/libdrm/libdrm-${LIBDRM_VERSION}.tar.xz"
-    
-    if [ $? -ne 0 ]; then
-        log_error "Failed to download libdrm"
-        exit 1
-    fi
-    
-    # 解压源码
-    log_info "Extracting libdrm source..."
-    cd "${SOURCES_DIR}"
-    tar -xf "libdrm-${LIBDRM_VERSION}.tar.xz"
-    
-    if [ $? -ne 0 ]; then
-        log_error "Failed to extract libdrm"
-        exit 1
-    fi
-    
-    # 重命名目录
-    mv "libdrm-${LIBDRM_VERSION}" "libdrm"
-    
-    # 清理下载的压缩包
-    rm -f "$archive_file"
-    
-    if [ -f "${LIBDRM_SOURCE_DIR}/meson.build" ]; then
-        log_success "libdrm source downloaded and extracted successfully"
+    log_info "Preparing libdrm source..."
+
+    if [ -d "$LIBDRM_SOURCE_DIR" ] && [ -f "${LIBDRM_SOURCE_DIR}/meson.build" ]; then
+        log_success "libdrm source already present: $LIBDRM_SOURCE_DIR"
     else
-        log_error "libdrm source extraction appears to be incomplete"
-        exit 1
-    fi
-}
-
-# 函数：根据目标架构获取系统信息
-get_target_info() {
-    local target="$1"
-    
-    case "$target" in
-        x86_64-linux-gnu|x86_64-linux-android|x86_64-linux-harmonyos|x86_64-windows-gnu|x86_64-macos)
-            echo "linux x86_64 x86_64 little"
-            ;;
-        aarch64-linux-gnu|aarch64-linux-android|aarch64-linux-harmonyos|aarch64-macos|aarch64-windows-gnu)
-            echo "linux aarch64 aarch64 little"
-            ;;
-        arm-linux-gnueabihf|arm-linux-android|arm-linux-harmonyos)
-            echo "linux arm arm little"
-            ;;
-        x86-linux-android)
-            echo "linux x86 i386 little"
-            ;;
-        riscv64-linux-gnu)
-            echo "linux riscv64 riscv64 little"
-            ;;
-        loongarch64-linux-gnu)
-            echo "linux loongarch64 loongarch64 little"
-            ;;
-        *)
-            echo "linux unknown unknown little"
-            ;;
-    esac
-}
-
-# 创建动态交叉编译配置文件
-create_cross_file() {
-    local target_name="$1"
-    local toolchain_file="$2"
-    local is_android="$3"
-    
-    # 获取目标架构信息
-    local target_arch=""
-    case "$target_name" in
-        "arm-linux-gnueabihf")
-            target_arch="arm-linux-gnueabihf"
-            ;;
-        "aarch64-linux-gnu")
-            target_arch="aarch64-linux-gnu"
-            ;;
-        "aarch64-linux-musl")
-            target_arch="aarch64-linux-musl"
-            ;;
-        "riscv64-linux-gnu")
-            target_arch="riscv64-linux-gnu"
-            ;;
-        "riscv64-linux-musl")
-            target_arch="riscv64-linux-gnu"
-            ;;
-        "x86_64-linux-gnu")
-            target_arch="x86_64-linux-gnu"
-            ;;
-        "x86_64-windows-gnu")
-            target_arch="x86_64-windows-gnu"
-            ;;
-        "x86_64-macos")
-            target_arch="x86_64-macos"
-            ;;
-        "aarch64-macos")
-            target_arch="aarch64-macos"
-            ;;
-        "aarch64-linux-android")
-            target_arch="aarch64-linux-android"
-            ;;
-        "arm-linux-android")
-            target_arch="arm-linux-android"
-            ;;
-        *)
-            target_arch="unknown"
-            ;;
-    esac
-    
-    TARGET_INFO=($(get_target_info "$target_arch"))
-    TARGET_SYSTEM="${TARGET_INFO[0]}"
-    TARGET_CPU_FAMILY="${TARGET_INFO[1]}"
-    TARGET_CPU="${TARGET_INFO[2]}"
-    TARGET_ENDIAN="${TARGET_INFO[3]}"
-    
-    # 创建动态交叉编译配置文件
-    CROSS_FILE="$PROJECT_ROOT_DIR/cross-build.txt"
-    
-    if [ "$is_android" = "true" ]; then
-        # Android 交叉编译配置
-        cat > "$CROSS_FILE" << EOF
-[binaries]
-c = '${TOOLCHAIN}/bin/${ANDROID_TARGET}${API_LEVEL}-clang'
-cpp = '${TOOLCHAIN}/bin/${ANDROID_TARGET}${API_LEVEL}-clang++'
-ar = '${TOOLCHAIN}/bin/llvm-ar'
-strip = '${TOOLCHAIN}/bin/llvm-strip'
-pkgconfig = 'pkg-config'
-
-[host_machine]
-system = '$TARGET_SYSTEM'
-cpu_family = '$TARGET_CPU_FAMILY'
-cpu = '$TARGET_CPU'
-endian = '$TARGET_ENDIAN'
-
-[built-in options]
-c_std = 'c11'
-default_library = 'both'
-EOF
-    else
-        # 常规交叉编译配置 - 直接使用目标名称获取前缀
-        local cross_prefix
-        cross_prefix=$(get_cross_compile_prefix "$target_name")
-        
-        if [ -z "$cross_prefix" ]; then
-            log_warning "No cross-compile prefix found for $target_name, using system compiler"
-            # 使用系统默认编译器
-            cat > "$CROSS_FILE" << EOF
-[binaries]
-c = ['gcc']
-cpp = ['g++']
-ar = ['ar']
-strip = ['strip']
-pkg-config = 'pkg-config'
-
-[host_machine]
-system = '$TARGET_SYSTEM'
-cpu_family = '$TARGET_CPU_FAMILY'
-cpu = '$TARGET_CPU'
-endian = '$TARGET_ENDIAN'
-
-[built-in options]
-c_std = 'c11'
-default_library = 'both'
-
-[properties]
-needs_exe_wrapper = true
-EOF
-        else
-            # 使用交叉编译工具链
-            log_info "Using cross prefix: $cross_prefix"
-            cat > "$CROSS_FILE" << EOF
-[binaries]
-c = ['${cross_prefix}gcc']
-cpp = ['${cross_prefix}g++']
-ar = ['${cross_prefix}ar']
-strip = ['${cross_prefix}strip']
-pkg-config = 'pkg-config'
-
-[host_machine]
-system = '$TARGET_SYSTEM'
-cpu_family = '$TARGET_CPU_FAMILY'
-cpu = '$TARGET_CPU'
-endian = '$TARGET_ENDIAN'
-
-[built-in options]
-c_std = 'c11'
-default_library = 'both'
-
-[properties]
-needs_exe_wrapper = true
-EOF
+        local desired_version
+        desired_version=$(detect_libdrm_version)
+        if [ "$desired_version" = "unknown" ]; then
+            desired_version="${LIBDRM_VERSION_OVERRIDE:-2.4.121}"
         fi
+
+        local archive_name="libdrm-${desired_version}.tar.xz"
+        local archive_path="${TEMP_DIR}/${archive_name}"
+        local download_url="${LIBDRM_DOWNLOAD_URL:-https://dri.freedesktop.org/libdrm/${archive_name}}"
+
+        ensure_tools_available wget tar
+
+        if [ ! -f "$archive_path" ]; then
+            log_info "Downloading ${download_url}"
+            if ! wget -O "$archive_path" "$download_url"; then
+                log_error "Failed to download libdrm archive from $download_url"
+                return 1
+            fi
+        fi
+
+        rm -rf "$LIBDRM_SOURCE_DIR"
+        mkdir -p "$SOURCES_DIR"
+
+        if ! tar -xf "$archive_path" -C "$SOURCES_DIR"; then
+            log_error "Failed to extract $archive_path"
+            return 1
+        fi
+
+        local extracted_dir="${SOURCES_DIR}/libdrm-${desired_version}"
+        if [ -d "$extracted_dir" ]; then
+            mv "$extracted_dir" "$LIBDRM_SOURCE_DIR"
+        elif [ ! -d "$LIBDRM_SOURCE_DIR" ]; then
+            log_error "Extracted libdrm directory not found"
+            return 1
+        fi
+
+        log_success "libdrm source prepared at $LIBDRM_SOURCE_DIR"
     fi
-    
-    log_info "Created cross-compilation file: $CROSS_FILE"
-    log_info "Target architecture: $target_arch"
-    log_info "Cross prefix: ${cross_prefix:-'system default'}"
+
+    LIBDRM_VERSION=$(detect_libdrm_version)
+    [ -z "$LIBDRM_VERSION" ] && LIBDRM_VERSION="unknown"
+    log_info "Using libdrm version: $LIBDRM_VERSION"
 }
 
-# 获取meson编译选项
-get_meson_options() {
-    local target="$1"
-    local enable_demos="$2"
-    
-    # Set test and demo options based on user preferences
-    local test_options=""
-    if [ "$enable_demos" = "true" ]; then
-        test_options="-Dtests=true -Dinstall-test-programs=true"
-    else
-        test_options="-Dtests=false -Dinstall-test-programs=false"
+setup_android_cross_compile() {
+    local target_name="$1"
+
+    local toolchain_dir
+    if ! toolchain_dir="$(_detect_ndk_toolchain_dir)"; then
+        log_error "Android NDK toolchain not found. Please set ANDROID_NDK_HOME."
+        return 1
     fi
-    
-    local meson_options=""
-    
-    case "$target" in
-        x86_64-linux-*|x86-linux-*)
-            # x86 Linux - enable all desktop GPU drivers
-            meson_options=""
-            meson_options+=" -Dintel=auto"
-            meson_options+=" -Dradeon=auto"
-            meson_options+=" -Damdgpu=auto"
-            meson_options+=" -Dnouveau=auto"
-            meson_options+=" -Dvmwgfx=auto"
-            meson_options+=" -Domap=disabled"
-            meson_options+=" -Dexynos=disabled"
-            meson_options+=" -Dfreedreno=disabled"
-            meson_options+=" -Dtegra=disabled"
-            meson_options+=" -Dvc4=disabled"
-            meson_options+=" -Detnaviv=disabled"
-            meson_options+=" $test_options"
-            meson_options+=" -Dman-pages=disabled"
-            meson_options+=" -Dvalgrind=disabled"
-            meson_options+=" -Dcairo-tests=disabled"
-            meson_options+=" -Dudev=true"
-            meson_options+=" -Dfreedreno-kgsl=false"
+
+    local api_level="${ANDROID_API_LEVEL:-23}"
+    local clang_triple=""
+    local cpu_family=""
+    local cpu=""
+
+    case "$target_name" in
+        aarch64-linux-android)
+            clang_triple="aarch64-linux-android"
+            cpu_family="aarch64"
+            cpu="aarch64"
             ;;
-        *android*|*harmonyos*)
-            # Mobile/embedded platforms - focus on mobile GPU drivers
-            meson_options=""
-            meson_options+=" -Dintel=disabled"
-            meson_options+=" -Dradeon=disabled"
-            meson_options+=" -Damdgpu=disabled"
-            meson_options+=" -Dnouveau=disabled"
-            meson_options+=" -Dvmwgfx=disabled"
-            meson_options+=" -Domap=auto"
-            meson_options+=" -Dexynos=auto"
-            meson_options+=" -Dfreedreno=auto"
-            meson_options+=" -Dtegra=auto"
-            meson_options+=" -Dvc4=auto"
-            meson_options+=" -Detnaviv=auto"
-            meson_options+=" $test_options"
-            meson_options+=" -Dman-pages=disabled"
-            meson_options+=" -Dvalgrind=disabled"
-            meson_options+=" -Dcairo-tests=disabled"
-            meson_options+=" -Dudev=false"
-            meson_options+=" -Dfreedreno-kgsl=true"
+        arm-linux-android)
+            clang_triple="armv7a-linux-androideabi"
+            cpu_family="arm"
+            cpu="armv7"
             ;;
-        aarch64-linux-gnu|arm-linux-gnueabihf|arm-linux-gnu)
-            # ARM Linux - enable ARM SoC and PCIe GPU drivers
-            meson_options=""
-            meson_options+=" -Dintel=disabled"
-            meson_options+=" -Dradeon=auto"
-            meson_options+=" -Damdgpu=auto"
-            meson_options+=" -Dnouveau=auto"
-            meson_options+=" -Dvmwgfx=disabled"
-            meson_options+=" -Domap=auto"
-            meson_options+=" -Dexynos=auto"
-            meson_options+=" -Dfreedreno=auto"
-            meson_options+=" -Dtegra=auto"
-            meson_options+=" -Dvc4=auto"
-            meson_options+=" -Detnaviv=auto"
-            meson_options+=" $test_options"
-            meson_options+=" -Dman-pages=disabled"
-            meson_options+=" -Dvalgrind=disabled"
-            meson_options+=" -Dcairo-tests=disabled"
-            meson_options+=" -Dudev=true"
-            meson_options+=" -Dfreedreno-kgsl=false"
-            ;;
-        *loongarch64*|*riscv64*)
-            # Alternative architectures - conservative GPU support
-            meson_options=""
-            meson_options+=" -Dintel=disabled"
-            meson_options+=" -Dradeon=auto"
-            meson_options+=" -Damdgpu=auto"
-            meson_options+=" -Dnouveau=auto"
-            meson_options+=" -Dvmwgfx=disabled"
-            meson_options+=" -Domap=disabled"
-            meson_options+=" -Dexynos=disabled"
-            meson_options+=" -Dfreedreno=auto"
-            meson_options+=" -Dtegra=auto"
-            meson_options+=" -Dvc4=auto"
-            meson_options+=" -Detnaviv=auto"
-            meson_options+=" $test_options"
-            meson_options+=" -Dman-pages=disabled"
-            meson_options+=" -Dvalgrind=disabled"
-            meson_options+=" -Dcairo-tests=disabled"
-            meson_options+=" -Dudev=true"
-            meson_options+=" -Dfreedreno-kgsl=false"
-            ;;
-        *windows*)
-            # Windows - minimal support, no Linux-specific features
-            meson_options=""
-            meson_options+=" -Dintel=auto"
-            meson_options+=" -Dradeon=auto"
-            meson_options+=" -Damdgpu=auto"
-            meson_options+=" -Dnouveau=auto"
-            meson_options+=" -Dvmwgfx=auto"
-            meson_options+=" -Domap=disabled"
-            meson_options+=" -Dexynos=disabled"
-            meson_options+=" -Dfreedreno=disabled"
-            meson_options+=" -Dtegra=disabled"
-            meson_options+=" -Dvc4=disabled"
-            meson_options+=" -Detnaviv=disabled"
-            meson_options+=" $test_options"
-            meson_options+=" -Dman-pages=disabled"
-            meson_options+=" -Dvalgrind=disabled"
-            meson_options+=" -Dcairo-tests=disabled"
-            meson_options+=" -Dudev=false"
-            meson_options+=" -Dfreedreno-kgsl=false"
-            ;;
-        *macos*)
-            # macOS - very minimal support, only basic functionality
-            meson_options=""
-            meson_options+=" -Dintel=disabled"
-            meson_options+=" -Dradeon=disabled"
-            meson_options+=" -Damdgpu=disabled"
-            meson_options+=" -Dnouveau=disabled"
-            meson_options+=" -Dvmwgfx=disabled"
-            meson_options+=" -Domap=disabled"
-            meson_options+=" -Dexynos=disabled"
-            meson_options+=" -Dfreedreno=disabled"
-            meson_options+=" -Dtegra=disabled"
-            meson_options+=" -Dvc4=disabled"
-            meson_options+=" -Detnaviv=disabled"
-            meson_options+=" $test_options"
-            meson_options+=" -Dman-pages=disabled"
-            meson_options+=" -Dvalgrind=disabled"
-            meson_options+=" -Dcairo-tests=disabled"
-            meson_options+=" -Dudev=false"
-            meson_options+=" -Dfreedreno-kgsl=false"
-            ;;        
         *)
-            # Default fallback - conservative settings
-            meson_options=""
-            meson_options+=" -Dintel=auto"
-            meson_options+=" -Dradeon=auto"
-            meson_options+=" -Damdgpu=auto"
-            meson_options+=" -Dnouveau=auto"
-            meson_options+=" -Dvmwgfx=auto"
-            meson_options+=" -Domap=disabled"
-            meson_options+=" -Dexynos=disabled"
-            meson_options+=" -Dfreedreno=auto"
-            meson_options+=" -Dtegra=auto"
-            meson_options+=" -Dvc4=auto"
-            meson_options+=" -Detnaviv=auto"
-            meson_options+=" $test_options"
-            meson_options+=" -Dman-pages=disabled"
-            meson_options+=" -Dvalgrind=disabled"
-            meson_options+=" -Dcairo-tests=disabled"
-            meson_options+=" -Dudev=false"
-            meson_options+=" -Dfreedreno-kgsl=false"
+            log_error "Unsupported Android target: $target_name"
+            return 1
             ;;
     esac
-    
-    echo "$meson_options"
+
+    local cross_file="${SCRIPT_DIR}/android-${target_name}.txt"
+    cat > "$cross_file" <<EOF
+[binaries]
+c = '${toolchain_dir}/bin/${clang_triple}${api_level}-clang'
+cpp = '${toolchain_dir}/bin/${clang_triple}${api_level}-clang++'
+ar = '${toolchain_dir}/bin/llvm-ar'
+strip = '${toolchain_dir}/bin/llvm-strip'
+objcopy = '${toolchain_dir}/bin/llvm-objcopy'
+pkg-config = 'pkg-config'
+
+[host_machine]
+system = 'android'
+cpu_family = '${cpu_family}'
+cpu = '${cpu}'
+endian = 'little'
+
+[built-in options]
+c_std = 'c11'
+cpp_std = 'c++11'
+default_library = 'shared'
+
+[properties]
+needs_exe_wrapper = true
+EOF
+
+    echo "$cross_file"
 }
 
+setup_cross_compile() {
+    local target_name="$1"
+    local cross_prefix_input="$2"
+    local cross_prefix
+    cross_prefix=$(normalize_cross_prefix "$cross_prefix_input")
+
+    if [ -z "$cross_prefix" ]; then
+        log_warning "Invalid cross prefix for $target_name"
+        return 1
+    fi
+
+    local c_compiler
+    c_compiler=$(find_cross_tool_in_path "$cross_prefix" "gcc")
+    if [ -z "$c_compiler" ]; then
+        log_warning "${cross_prefix}gcc not found"
+        return 1
+    fi
+
+    local cxx_compiler
+    cxx_compiler=$(find_cross_tool_in_path "$cross_prefix" "g++")
+    if [ -z "$cxx_compiler" ]; then
+        log_warning "${cross_prefix}g++ not found"
+        return 1
+    fi
+
+    local ar_tool
+    ar_tool=$(find_cross_tool_in_path "$cross_prefix" "ar")
+    if [ -z "$ar_tool" ]; then
+        log_warning "${cross_prefix}ar not found"
+        return 1
+    fi
+
+    local strip_tool
+    strip_tool=$(find_cross_tool_in_path "$cross_prefix" "strip")
+    if [ -z "$strip_tool" ]; then
+        strip_tool=$(command -v strip 2>/dev/null || true)
+    fi
+    [ -z "$strip_tool" ] && strip_tool="strip"
+
+    local objcopy_tool
+    objcopy_tool=$(find_cross_tool_in_path "$cross_prefix" "objcopy")
+    if [ -z "$objcopy_tool" ]; then
+        objcopy_tool=$(command -v objcopy 2>/dev/null || true)
+    fi
+    [ -z "$objcopy_tool" ] && objcopy_tool="objcopy"
+
+    local system="linux"
+    local cpu_family="aarch64"
+    local cpu="aarch64"
+
+    case "$target_name" in
+        arm-linux-gnueabihf|arm-linux-musleabihf)
+            cpu_family="arm"
+            cpu="armv7"
+            ;;
+        aarch64-linux-gnu|aarch64-linux-musl)
+            cpu_family="aarch64"
+            cpu="aarch64"
+            ;;
+        riscv64-linux-gnu|riscv64-linux-musl)
+            cpu_family="riscv64"
+            cpu="riscv64"
+            ;;
+        x86_64-linux-gnu)
+            cpu_family="x86_64"
+            cpu="x86_64"
+            ;;
+        x86_64-windows-gnu)
+            system="windows"
+            cpu_family="x86_64"
+            cpu="x86_64"
+            ;;
+        x86_64-macos)
+            system="darwin"
+            cpu_family="x86_64"
+            cpu="x86_64"
+            ;;
+        aarch64-macos)
+            system="darwin"
+            cpu_family="aarch64"
+            cpu="aarch64"
+            ;;
+    esac
+
+    local cross_file="${SCRIPT_DIR}/cross-${target_name}.txt"
+    cat > "$cross_file" <<EOF
+[binaries]
+c = '${c_compiler}'
+cpp = '${cxx_compiler}'
+ar = '${ar_tool}'
+strip = '${strip_tool}'
+objcopy = '${objcopy_tool}'
+pkg-config = 'pkg-config'
+
+[host_machine]
+system = '${system}'
+cpu_family = '${cpu_family}'
+cpu = '${cpu}'
+endian = 'little'
+
+[built-in options]
+c_std = 'c11'
+cpp_std = 'c++11'
+default_library = 'shared'
+
+[properties]
+needs_exe_wrapper = true
+EOF
+
+    echo "$cross_file"
+}
+
+build_target_internal() {
+    local target_name="$1"
+    local platform="$2"
+    local output_dir="$3"
+    local cross_prefix="$4"
+    local expected_arch="$5"
+
+    log_info "Building $target_name (platform: $platform)"
+
+    mkdir -p "$output_dir"
+
+    local build_dir="${LIBDRM_SOURCE_DIR}/build_${target_name}"
+    rm -rf "$build_dir"
+    mkdir -p "$build_dir"
+
+    local cross_file=""
+    local normalized_prefix=$(normalize_cross_prefix "$cross_prefix")
+
+    case "$platform" in
+        android)
+            if ! cross_file=$(setup_android_cross_compile "$target_name"); then
+                return 1
+            fi
+            ;;
+        native)
+            normalized_prefix=""
+            ;;
+        macos)
+            log_warning "macOS cross builds are not fully supported; attempting native build"
+            normalized_prefix=""
+            ;;
+        *)
+            if [ -n "$normalized_prefix" ]; then
+                if ! cross_file=$(setup_cross_compile "$target_name" "$normalized_prefix"); then
+                    log_warning "Falling back to host toolchain for $target_name"
+                    normalized_prefix=""
+                    cross_file=""
+                fi
+            fi
+            ;;
+    esac
+
+    local meson_args=(
+        "--prefix" "$output_dir"
+        "--libdir=lib"
+        "--buildtype=$BUILD_TYPE_LOWER"
+        "-Ddefault_library=shared"
+        "-Dtests=false"
+        "-Dvalgrind=disabled"
+        "-Dman-pages=disabled"
+    )
+
+    if [ -n "$cross_file" ] && [ -f "$cross_file" ]; then
+        meson_args+=("--cross-file=$cross_file")
+        log_info "Using cross file: $cross_file"
+    fi
+
+    local old_pkg_config_path="${PKG_CONFIG_PATH:-}"
+
+    log_info "Configuring with meson..."
+    if ! meson setup "$build_dir" "$LIBDRM_SOURCE_DIR" "${meson_args[@]}"; then
+        export PKG_CONFIG_PATH="$old_pkg_config_path"
+        log_error "Meson configuration failed for $target_name"
+        return 1
+    fi
+
+    log_info "Building with ninja..."
+    if ! ninja -C "$build_dir"; then
+        export PKG_CONFIG_PATH="$old_pkg_config_path"
+        log_error "Build failed for $target_name"
+        return 1
+    fi
+
+    log_info "Installing to $output_dir"
+    if ! ninja -C "$build_dir" install; then
+        export PKG_CONFIG_PATH="$old_pkg_config_path"
+        log_error "Install failed for $target_name"
+        return 1
+    fi
+
+    export PKG_CONFIG_PATH="$old_pkg_config_path"
+
+    local available_tools
+    available_tools=$(check_cross_compile_tools "$normalized_prefix" "$target_name" "$build_dir")
+
+    if [ "$BUILD_TYPE_LOWER" = "release" ]; then
+        if [ "$platform" = "android" ]; then
+            compress_android_libraries "$output_dir" "$target_name" "$normalized_prefix"
+        else
+            compress_artifacts_in_dir \
+                "$output_dir" \
+                "$target_name" \
+                "$available_tools" \
+                --locale zh \
+                --allow-upx \
+                --summary-label "${target_name} 压缩统计:"
+        fi
+    else
+        log_info "Debug build detected, skipping compression"
+    fi
+
+    validate_build_architecture "$output_dir" "$target_name"
+
+    log_success "$target_name build completed"
+    return 0
+}
+
+build_target() {
+    local target_name="$1"
+    local platform="${2:-}"
+    local output_dir="${3:-}"
+    local cross_prefix="${4:-}"
+    local expected_arch="${5:-}"
+
+    if [ -z "$platform" ] || [ -z "$output_dir" ]; then
+        local config
+        config=$(get_target_config "$target_name")
+        if [ -z "$config" ]; then
+            log_error "Unknown target: $target_name"
+            return 1
+        fi
+        IFS=':' read -r _target platform output_dir cross_prefix expected_arch <<< "$config"
+    fi
+
+    build_target_internal "$target_name" "$platform" "$output_dir" "$cross_prefix" "$expected_arch"
+}
+
+build_android_target() {
+    local target_name="$1"
+    local output_dir="$2"
+    local cross_prefix="$3"
+    local expected_arch="$4"
+
+    build_target_internal "$target_name" "android" "$output_dir" "$cross_prefix" "$expected_arch"
+}
 # Android版本的压缩处理函数
 compress_android_libraries() {
     local output_dir="$1"
     local target_name="$2"
-    
+    local cross_prefix="${3:-}"
+
     log_info "Compressing Android libraries for $target_name..."
-    
-    # Android使用与常规构建相同的压缩逻辑
-    local available_tools
-    available_tools=$(check_cross_compile_tools "" "$target_name")
-    
-    compress_libraries "$output_dir" "$target_name" "$available_tools"
-}
 
-# Android编译函数
-build_android_target() {
-    local target_name="$1"
-    local output_dir="$2"
-    
-    log_info "Building Android target: $target_name..."
-    
-    # 初始化Android环境
-    init_android_env "$target_name"
-    
-    # 创建输出目录
-    mkdir -p "$output_dir"
-    
-    # 创建构建目录
-    local build_dir="${LIBDRM_SOURCE_DIR}/build_${target_name}"
-    rm -rf "$build_dir"  # 清理旧的构建目录
-    mkdir -p "$build_dir"
-    
-    # 创建交叉编译配置文件
-    create_cross_file "$target_name" "" "true"
-    
-    # 应用 meson 时钟偏差补丁
-    apply_meson_clockskew_patch
-    
-    # 获取meson编译选项
-    local meson_options
-    meson_options=$(get_meson_options "${ANDROID_TARGET}-android" false)
-    
-    # 使用统一的构建执行函数
-    if execute_libdrm_build "$target_name" "$output_dir" "$build_dir" "$CROSS_FILE" "$meson_options" "true"; then
-        return 0
-    else
-        return 1
+    if [ -z "$cross_prefix" ]; then
+        case "$target_name" in
+            aarch64-linux-android)
+                cross_prefix="aarch64-linux-android-"
+                ;;
+            arm-linux-android)
+                cross_prefix="arm-linux-androideabi-"
+                ;;
+        esac
     fi
-}
 
-# 统一的构建执行函数
-execute_libdrm_build() {
-    local target_name="$1"
-    local output_dir="$2"
-    local build_dir="$3"
-    local cross_file="$4"
-    local meson_options="$5"
-    local is_android="$6"
-    
-    log_info "Executing libdrm build for $target_name..."
-    
-    # 配置Meson - 强制使用交叉编译文件
-    local MESON_CMD="meson setup $build_dir $LIBDRM_SOURCE_DIR -Dprefix=$output_dir -Dbuildtype=${BUILD_TYPE_LOWER} -Dlibdir=lib"
-    if [ -n "$cross_file" ] && [ -f "$cross_file" ]; then
-        MESON_CMD="$MESON_CMD --cross-file=$cross_file"
-        log_info "Using cross-file: $cross_file"
-    else
-        log_warning "Cross-file not found or not specified, using native build"
-    fi
-    if [ -n "$meson_options" ]; then
-        MESON_CMD="$MESON_CMD $meson_options"
-    fi
-    
-    log_info "Meson command: $MESON_CMD"
-    eval "$MESON_CMD"
-    
-    if [ $? -ne 0 ]; then
-        log_error "Meson configuration failed for $target_name"
-        return 1
-    fi
-    
-    # 编译
-    ninja -C "$build_dir"
-    
-    if [ $? -ne 0 ]; then
-        log_error "Build failed for $target_name"
-        return 1
-    fi
-    
-    # 安装
-    ninja -C "$build_dir" install
-    
-    if [ $? -ne 0 ]; then
-        log_error "Install failed for $target_name"
-        return 1
-    fi
-    
-    log_success "$target_name build completed successfully"
-    
-    # 压缩库文件
-    if [ "$BUILD_TYPE_LOWER" = "release" ]; then
-        if [ "$is_android" = "true" ]; then
-            compress_android_libraries "$output_dir" "$target_name"
-        else
-            # 对于非Android目标，需要重新检测可用的工具
-            local cross_prefix
-            cross_prefix=$(get_cross_compile_prefix "$target_name")
-            local available_tools
-            available_tools=$(check_cross_compile_tools "$cross_prefix" "$target_name")
-            compress_libraries "$output_dir" "$target_name" "$available_tools"
-        fi
-    else
-        log_info "Skipping library compression for Debug build type"
-    fi
-    
-    # 验证构建架构
-    validate_build_architecture "$output_dir" "$target_name"
-    
-    # 返回到工作目录
-    cd "$WORKSPACE_DIR"
-    
-    return 0
-}
-
-# 编译函数
-build_target() {
-    local target_name="$1"
-    local toolchain_file="$2"
-    local output_dir="$3"
-    
-    log_info "Building $target_name..."
-    
-    # 提取交叉编译前缀
-    local cross_prefix
-    cross_prefix=$(get_cross_compile_prefix "$toolchain_file")
-    
-    # 检查交叉编译工具
     local available_tools
     available_tools=$(check_cross_compile_tools "$cross_prefix" "$target_name")
-    
-    # 创建输出目录
-    mkdir -p "$output_dir"
-    
-    # 创建构建目录
-    local build_dir="${LIBDRM_SOURCE_DIR}/build_${target_name}"
-    rm -rf "$build_dir"  # 清理旧的构建目录
-    mkdir -p "$build_dir"
-    
-    # 创建交叉编译配置文件
-    create_cross_file "$target_name" "$toolchain_file" "false"
-    
-    # 应用 meson 时钟偏差补丁
-    apply_meson_clockskew_patch
-    
-    # 获取目标架构
-    local target_arch=""
-    case "$target_name" in
-        "riscv64-linux-gnu"|"riscv64-linux-musl")
-            target_arch="riscv64-linux-gnu"
-            ;;
-        *)
-            target_arch="unknown"
-            ;;
-    esac
-    
-    # 获取meson编译选项
-    local meson_options
-    meson_options=$(get_meson_options "$target_arch" false)
-    
-    # 配置Meson
-    local MESON_CMD="meson setup $build_dir $LIBDRM_SOURCE_DIR -Dprefix=$output_dir -Dbuildtype=${BUILD_TYPE_LOWER} -Dlibdir=lib"
-    if [ -n "$CROSS_FILE" ]; then
-        MESON_CMD="$MESON_CMD --cross-file=$CROSS_FILE"
-    fi
-    # Always add meson options
-    MESON_CMD="$MESON_CMD $meson_options"
-    
-    # 使用统一的构建执行函数
-    execute_libdrm_build "$target_name" "$output_dir" "$build_dir" "$CROSS_FILE" "$meson_options" "false"
-}
 
-# 压缩库文件
-compress_libraries() {
-    local output_dir="$1"
-    local target_name="$2"
-    local available_tools="$3"
-    
-    log_info "Compressing libraries for $target_name..."
-    
-    # 解析可用工具
-    local strip_cmd=""
-    local objcopy_cmd=""
-    local upx_cmd=""
-    local xz_cmd=""
-    local gzip_cmd=""
-    
-    if [ -n "$available_tools" ]; then
-        # 从工具列表中提取各类工具
-        strip_cmd=$(echo "$available_tools" | grep -o "strip:[^ ]*" | cut -d: -f2)
-        objcopy_cmd=$(echo "$available_tools" | grep -o "objcopy:[^ ]*" | cut -d: -f2)
-        upx_cmd=$(echo "$available_tools" | grep -o "upx:[^ ]*" | cut -d: -f2)
-        xz_cmd=$(echo "$available_tools" | grep -o "xz:[^ ]*" | cut -d: -f2)
-        gzip_cmd=$(echo "$available_tools" | grep -o "gzip:[^ ]*" | cut -d: -f2)
-    fi
-    
-    # 显示可用的工具
-    log_info "Available compression tools:"
-    [ -n "$strip_cmd" ] && log_info "  Strip: $strip_cmd"
-    [ -n "$objcopy_cmd" ] && log_info "  Objcopy: $objcopy_cmd"
-    [ -n "$upx_cmd" ] && log_info "  UPX: $upx_cmd"
-    [ -n "$xz_cmd" ] && log_info "  XZ: $xz_cmd"
-    [ -n "$gzip_cmd" ] && log_info "  GZIP: $gzip_cmd"
-    
-    # 查找所有 .so 和 .a 文件
-    local lib_files
-    lib_files=$(find "$output_dir" -type f \( -name "*.so*" -o -name "*.a" \) 2>/dev/null || true)
-    
-    if [ -z "$lib_files" ]; then
-        log_warning "No library files found to compress in $output_dir"
-        return 0
-    fi
-    
-    local compressed_count=0
-    local total_original_size=0
-    local total_compressed_size=0
-    
-    while IFS= read -r lib_file; do
-        [ -z "$lib_file" ] && continue
-        
-        local original_size
-        original_size=$(stat -c%s "$lib_file" 2>/dev/null || echo "0")
-        total_original_size=$((total_original_size + original_size))
-        
-        local final_size=$original_size
-        local compression_method="none"
-        local compression_applied=false
-        
-        log_info "  Processing: $(basename "$lib_file") (${original_size} bytes)"
-        
-        # 1. 首先尝试 strip 移除符号表（对所有库文件都有效）
-        if [ -n "$strip_cmd" ]; then
-            # 创建备份来测试 strip 效果
-            local backup_file="${lib_file}.backup"
-            cp "$lib_file" "$backup_file"
-            
-            log_info "    Using $strip_cmd to strip symbols..."
-            
-            # 使用不同的 strip 参数
-            if [[ "$lib_file" == *.so* ]]; then
-                # 对于共享库，保留动态符号
-                "$strip_cmd" --strip-unneeded "$lib_file" 2>/dev/null || true
-            else
-                # 对于静态库，移除调试符号
-                "$strip_cmd" --strip-debug "$lib_file" 2>/dev/null || true
-            fi
-            
-            local stripped_size
-            stripped_size=$(stat -c%s "$lib_file" 2>/dev/null || echo "$original_size")
-            
-            if [ "$stripped_size" -lt "$original_size" ]; then
-                final_size=$stripped_size
-                compression_method="strip"
-                compression_applied=true
-                rm -f "$backup_file"
-                local strip_reduction
-                strip_reduction=$(( (original_size - stripped_size) * 100 / original_size ))
-                log_success "      Stripped ${strip_reduction}% of symbols ($strip_cmd)"
-            else
-                # 如果 strip 没有效果，恢复原文件
-                mv "$backup_file" "$lib_file"
-                log_info "      Strip had no effect"
-            fi
-        else
-            log_info "    Strip tool not available for this target"
-        fi
-        
-        # 2. 对于动态库，尝试 UPX 压缩
-        if [[ "$lib_file" == *.so* ]] && [ -n "$upx_cmd" ]; then
-            local compressed_file="${lib_file}.upx"
-            log_info "    Trying UPX compression with $upx_cmd..."
-            
-            # 尝试不同的 UPX 压缩级别
-            if "$upx_cmd" --best --lzma -o "$compressed_file" "$lib_file" &>/dev/null; then
-                local upx_size
-                upx_size=$(stat -c%s "$compressed_file" 2>/dev/null || echo "$final_size")
-                
-                if [ "$upx_size" -lt "$final_size" ]; then
-                    local upx_reduction
-                    upx_reduction=$(( (final_size - upx_size) * 100 / final_size ))
-                    mv "$compressed_file" "$lib_file"
-                    final_size=$upx_size
-                    compression_method="${compression_method}+upx"
-                    compression_applied=true
-                    log_success "      UPX: ${upx_reduction}% additional reduction"
-                else
-                    rm -f "$compressed_file"
-                    log_info "      UPX compression not beneficial"
-                fi
-            else
-                rm -f "$compressed_file"
-                log_info "      UPX compression failed"
-            fi
-        elif [[ "$lib_file" == *.so* ]]; then
-            log_info "    UPX not available for this target"
-        fi
-        
-        # 3. 尝试使用 objcopy 进一步优化（如果可用）
-        if [ -n "$objcopy_cmd" ] && [ "$compression_applied" = "true" ]; then
-            log_info "    Optimizing with $objcopy_cmd..."
-            if "$objcopy_cmd" --remove-section=.comment --remove-section=.note "$lib_file" 2>/dev/null; then
-                local objcopy_size
-                objcopy_size=$(stat -c%s "$lib_file" 2>/dev/null || echo "$final_size")
-                if [ "$objcopy_size" -lt "$final_size" ]; then
-                    final_size=$objcopy_size
-                    compression_method="${compression_method}+objcopy"
-                    log_info "      objcopy optimization applied"
-                fi
-            fi
-        fi
-        
-        total_compressed_size=$((total_compressed_size + final_size))
-        
-        if [ "$compression_applied" = "true" ]; then
-            compressed_count=$((compressed_count + 1))
-            local total_reduction
-            total_reduction=$(( (original_size - final_size) * 100 / original_size ))
-            log_success "    Final: $original_size → $final_size bytes (-${total_reduction}%, ${compression_method#none+})"
-        else
-            log_info "    No compression applied"
-        fi
-        
-        echo ""
-        
-    done <<< "$lib_files"
-    
-    # 显示压缩统计
-    if [ "$compressed_count" -gt 0 ]; then
-        local total_reduction
-        total_reduction=$(( (total_original_size - total_compressed_size) * 100 / total_original_size ))
-        log_success "Compression summary for $target_name:"
-        log_success "  Files processed: $(echo "$lib_files" | wc -l)"
-        log_success "  Files optimized: $compressed_count"
-        log_success "  Total size: $total_original_size → $total_compressed_size bytes (-${total_reduction}%)"
-    else
-        log_info "No significant compression achieved for $target_name (files may already be optimized)"
-    fi
-    
-    # 显示每个文件的详细信息
-    log_info "Final library file sizes:"
-    while IFS= read -r lib_file; do
-        [ -z "$lib_file" ] && continue
-        local size
-        size=$(stat -c%s "$lib_file" 2>/dev/null || echo "0")
-        local size_kb
-        size_kb=$((size / 1024))
-        log_info "  $(basename "$lib_file"): ${size_kb} KB"
-    done <<< "$lib_files"
+    compress_artifacts_in_dir \
+        "$output_dir" \
+        "$target_name" \
+        "$available_tools" \
+        --locale zh \
+        --allow-upx \
+        --allow-xz \
+        --allow-gzip \
+        --print-details \
+        --summary-label "${target_name} 压缩统计:"
 }
 
 # 创建软链接 - 已废弃，新目标名称不再需要软链接
@@ -923,87 +517,30 @@ init_android_env() {
 
 # 获取默认编译目标列表
 get_default_build_targets() {
-    # 如果私有变量不存在或为空，返回所有目标的配置
     if [ -z "$_DEFAULT_BUILD_TARGETS" ]; then
-        # 所有目标的配置 - 不再依赖 CMake 工具链文件
-        echo "arm-linux-gnueabihf:none:${LIBDRM_OUTPUT_DIR}/arm-linux-gnueabihf"
-        echo "aarch64-linux-gnu:none:${LIBDRM_OUTPUT_DIR}/aarch64-linux-gnu"
-        echo "riscv64-linux-gnu:none:${LIBDRM_OUTPUT_DIR}/riscv64-linux-gnu"
-        echo "arm-linux-musleabihf:none:${LIBDRM_OUTPUT_DIR}/arm-linux-musleabihf"
-        echo "aarch64-linux-musl:none:${LIBDRM_OUTPUT_DIR}/aarch64-linux-musl"
-        echo "riscv64-linux-musl:none:${LIBDRM_OUTPUT_DIR}/riscv64-linux-musl"
-        echo "x86_64-linux-gnu:none:${LIBDRM_OUTPUT_DIR}/x86_64-linux-gnu"
-        echo "x86_64-windows-gnu:none:${LIBDRM_OUTPUT_DIR}/x86_64-windows-gnu"
-        echo "x86_64-macos:none:${LIBDRM_OUTPUT_DIR}/x86_64-macos"
-        echo "aarch64-macos:none:${LIBDRM_OUTPUT_DIR}/aarch64-macos"
-        echo "aarch64-linux-android:android:${LIBDRM_OUTPUT_DIR}/aarch64-linux-android"
-        echo "arm-linux-android:android:${LIBDRM_OUTPUT_DIR}/arm-linux-android"
+        for target_name in "${ALL_KNOWN_TARGETS[@]}"; do
+            local config="${TARGET_CONFIGS[$target_name]:-}"
+            [ -n "$config" ] && echo "$config"
+        done
         return 0
     fi
-    
-    # 解析限制的默认目标列表
+
     IFS=',' read -ra TARGET_ARRAY <<< "$_DEFAULT_BUILD_TARGETS"
     for target_name in "${TARGET_ARRAY[@]}"; do
-        # 去除空格
         target_name=$(echo "$target_name" | tr -d ' ')
-        if [ -n "$target_name" ]; then
-            local target_config
-            target_config=$(get_target_config "$target_name")
-            if [ -n "$target_config" ]; then
-                echo "$target_config"
-            else
-                log_warning "Invalid default target ignored: $target_name"
-            fi
+        [ -z "$target_name" ] && continue
+        local config="${TARGET_CONFIGS[$target_name]:-}"
+        if [ -n "$config" ]; then
+            echo "$config"
+        else
+            log_warning "Invalid default target ignored: $target_name"
         fi
     done
 }
 
-# 获取目标配置
 get_target_config() {
     local target_name="$1"
-    
-    # 定义目标映射 - 处理别名，不再依赖 CMake 工具链文件
-    case "$target_name" in
-        "arm-linux-gnueabihf")
-            echo "arm-linux-gnueabihf:none:${LIBDRM_OUTPUT_DIR}/arm-linux-gnueabihf"
-            ;;
-        "aarch64-linux-gnu")
-            echo "aarch64-linux-gnu:none:${LIBDRM_OUTPUT_DIR}/aarch64-linux-gnu"
-            ;;
-        "arm-linux-musleabihf")
-            echo "arm-linux-musleabihf:none:${LIBDRM_OUTPUT_DIR}/arm-linux-musleabihf"
-            ;;
-        "riscv64-linux-gnu")
-            echo "riscv64-linux-gnu:none:${LIBDRM_OUTPUT_DIR}/riscv64-linux-gnu"
-            ;;
-        "aarch64-linux-musl")
-            echo "aarch64-linux-musl:none:${LIBDRM_OUTPUT_DIR}/aarch64-linux-musl"
-            ;;
-        "riscv64-linux-musl")
-            echo "riscv64-linux-musl:none:${LIBDRM_OUTPUT_DIR}/riscv64-linux-musl"
-            ;;
-        "x86_64-linux-gnu")
-            echo "x86_64-linux-gnu:none:${LIBDRM_OUTPUT_DIR}/x86_64-linux-gnu"
-            ;;
-        "x86_64-windows-gnu")
-            echo "x86_64-windows-gnu:none:${LIBDRM_OUTPUT_DIR}/x86_64-windows-gnu"
-            ;;
-        "x86_64-macos")
-            echo "x86_64-macos:none:${LIBDRM_OUTPUT_DIR}/x86_64-macos"
-            ;;
-        "aarch64-macos")
-            echo "aarch64-macos:none:${LIBDRM_OUTPUT_DIR}/aarch64-macos"
-            ;;
-        "aarch64-linux-android")
-            echo "aarch64-linux-android:android:${LIBDRM_OUTPUT_DIR}/aarch64-linux-android"
-            ;;
-        "arm-linux-android")
-            echo "arm-linux-android:android:${LIBDRM_OUTPUT_DIR}/arm-linux-android"
-            ;;
-        *)
-            echo ""
-            ;;
-    esac
+    echo "${TARGET_CONFIGS[$target_name]:-}"
 }
 
 # 验证目标名称
@@ -1082,10 +619,13 @@ main() {
     log_info "Selected build type: $BUILD_TYPE"
     
     # 检查工具
-    check_tools
+    ensure_tools_available meson ninja pkg-config
     
     # 下载源码
     download_libdrm
+
+    # 修复 Meson clockskew 问题
+    apply_meson_clockskew_patch
     
     # 创建输出目录
     mkdir -p "$LIBDRM_OUTPUT_DIR"
@@ -1102,29 +642,29 @@ main() {
             exit 1
         fi
         
-        IFS=':' read -r target_name toolchain_file output_dir <<< "$target_config"
+        IFS=':' read -r target_name build_mode output_dir cross_prefix expected_arch <<< "$target_config"
         local effective_output_dir
         effective_output_dir=$(get_output_dir_for_build_type "$output_dir")
         log_info "Resolved output directory: $effective_output_dir"
         
-        # 检查是否为Android目标
-            if [[ "$target_to_build" == *"-android" ]]; then
-            # Android目标使用专门的构建函数
-            if build_android_target "$target_name" "$effective_output_dir"; then
-                log_success "$target_to_build build completed successfully"
-            else
-                log_error "Failed to build $target_to_build"
-                exit 1
-            fi
-        else
-            # 构建目标 - 不再检查 CMake 工具链文件
-            if build_target "$target_name" "$toolchain_file" "$effective_output_dir"; then
-                log_success "$target_to_build build completed successfully"
-            else
-                log_error "Failed to build $target_to_build"
-                exit 1
-            fi
-        fi
+        case "$build_mode" in
+            android)
+                if build_android_target "$target_name" "$effective_output_dir" "$cross_prefix" "$expected_arch"; then
+                    log_success "$target_to_build build completed successfully"
+                else
+                    log_error "Failed to build $target_to_build"
+                    exit 1
+                fi
+                ;;
+            *)
+                if build_target "$target_name" "$build_mode" "$effective_output_dir" "$cross_prefix" "$expected_arch"; then
+                    log_success "$target_to_build build completed successfully"
+                else
+                    log_error "Failed to build $target_to_build"
+                    exit 1
+                fi
+                ;;
+        esac
         
         # 软链接创建已废弃
         # create_symlinks "$target_to_build"
@@ -1150,25 +690,25 @@ main() {
         while IFS= read -r target_config; do
             [ -z "$target_config" ] && continue
             
-            IFS=':' read -r target_name toolchain_file output_dir <<< "$target_config"
+            IFS=':' read -r target_name build_mode output_dir cross_prefix expected_arch <<< "$target_config"
             local effective_output_dir
             effective_output_dir=$(get_output_dir_for_build_type "$output_dir")
             log_info "Resolved output directory: $effective_output_dir"
             
-            # 检查是否为Android目标
-            if [[ "$target_name" == *"-android" ]]; then
-                # Android目标使用专门的构建函数
-                if ! build_android_target "$target_name" "$effective_output_dir"; then
-                    log_warning "Failed to build $target_name, continuing with next target"
-                    continue
-                fi
-            else
-                # 构建目标 - 不再检查 CMake 工具链文件
-                if ! build_target "$target_name" "$toolchain_file" "$effective_output_dir"; then
-                    log_warning "Failed to build $target_name, continuing with next target"
-                    continue
-                fi
-            fi
+            case "$build_mode" in
+                android)
+                    if ! build_android_target "$target_name" "$effective_output_dir" "$cross_prefix" "$expected_arch"; then
+                        log_warning "Failed to build $target_name, continuing with next target"
+                        continue
+                    fi
+                    ;;
+                *)
+                    if ! build_target "$target_name" "$build_mode" "$effective_output_dir" "$cross_prefix" "$expected_arch"; then
+                        log_warning "Failed to build $target_name, continuing with next target"
+                        continue
+                    fi
+                    ;;
+            esac
         done <<< "$targets_to_build"
         
         # 软链接创建已废弃
@@ -1194,11 +734,12 @@ create_version_file() {
     log_info "Creating version.ini file..."
     
     local version_file="${LIBDRM_OUTPUT_DIR}/version.ini"
-    
+    local version_to_write="${LIBDRM_VERSION:-unknown}"
+
     # 写入版本信息到version.ini
     cat > "$version_file" << EOF
 [version]
-version=$LIBDRM_VERSION
+version=$version_to_write
 EOF
     
     if [ $? -eq 0 ]; then
@@ -1414,6 +955,8 @@ cleanup() {
     
     # 清理交叉编译配置文件
     [ -f "$PROJECT_ROOT_DIR/cross-build.txt" ] && rm -f "$PROJECT_ROOT_DIR/cross-build.txt"
+    find "$SCRIPT_DIR" -maxdepth 1 -name "cross-*.txt" -type f -delete 2>/dev/null || true
+    find "$SCRIPT_DIR" -maxdepth 1 -name "android-*.txt" -type f -delete 2>/dev/null || true
 }
 
 # 帮助信息
@@ -1462,12 +1005,11 @@ Examples:
 
 Features:
     - Fixed version: ${LIBDRM_VERSION}
-    - Uses meson build system
-    - Cross-compilation support via cross-build.txt
-    - Automatic meson clockskew patch to avoid time synchronization issues
-    - Automatic library compression using available tools
-    - UPX compression for .so files (if available)
-    - Symbol stripping for size reduction
+    - Meson + Ninja build pipeline
+    - Automatic Meson clockskew patching
+    - Cross-compilation support via generated Meson cross files
+    - Library compression with strip/objcopy/UPX when available
+    - Architecture validation for generated artifacts
     - Compression statistics and size reporting
 EOF
 }

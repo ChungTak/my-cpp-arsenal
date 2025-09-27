@@ -23,58 +23,35 @@ PARSED_TARGET=""
 # 限制默认编译目标
 _DEFAULT_BUILD_TARGETS="aarch64-linux-gnu,arm-linux-gnueabihf,aarch64-linux-android,arm-linux-android"
 
-# 错误处理函数
-handle_error() {
-    local message="$1"
-    local exit_code="${2:-1}"
-    log_error "$message"
-    exit "$exit_code"
-}
-
-# 检查命令执行结果
+# 错误处理辅助
 check_command_result() {
-    local result=$1
+    local exit_code="$1"
     local message="$2"
-    if [ "$result" -ne 0 ]; then
-        handle_error "$message" "$result"
-    fi
-}
 
-# 检查必要的工具
-check_tools() {
-    local tools=("git" "cmake" "make")
-    for tool in "${tools[@]}"; do
-        if ! command -v "$tool" &> /dev/null; then
-            log_error "Missing required tool: $tool"
-            exit 1
-        fi
-    done
+    if [ "$exit_code" -ne 0 ]; then
+        log_error "$message"
+        exit "$exit_code"
+    fi
 }
 
 # 克隆 mpp 源码
 clone_mpp() {
     log_info "Checking mpp repository..."
-    
-    # 创建sources目录
+
     mkdir -p "${SOURCES_DIR}"
-    
-    # 如果目录已存在且包含CMakeLists.txt，跳过克隆
+
     if [ -d "${MPP_SOURCE_DIR}" ] && [ -f "${MPP_SOURCE_DIR}/CMakeLists.txt" ]; then
         log_success "mpp source already exists, skipping clone"
         return 0
     fi
-    
-    # 如果目录存在但不完整，先删除
+
     if [ -d "${MPP_SOURCE_DIR}" ]; then
         log_warning "Removing incomplete mpp directory"
         rm -rf "${MPP_SOURCE_DIR}"
     fi
-    
-    # 克隆最新代码
+
     log_info "Cloning mpp repository..."
-    git clone --depth=1 https://github.com/rockchip-linux/mpp "${MPP_SOURCE_DIR}"
-    
-    if [ $? -eq 0 ]; then
+    if git clone --depth=1 https://github.com/rockchip-linux/mpp "${MPP_SOURCE_DIR}"; then
         log_success "mpp cloned successfully"
     else
         log_error "Failed to clone mpp"
@@ -85,31 +62,26 @@ clone_mpp() {
 # 从工具链文件提取 CROSS_COMPILE 前缀
 get_cross_compile_prefix() {
     local toolchain_file="$1"
-    
+
+    if [ -z "$toolchain_file" ] || [ "$toolchain_file" = "android" ]; then
+        echo ""
+        return 0
+    fi
+
     if [ ! -f "$toolchain_file" ]; then
         echo ""
-        return 1
+        return 0
     fi
-    
-    # 从 CMake 工具链文件中提取 CROSS_COMPILE 前缀
-    local cross_compile_line
-    cross_compile_line=$(grep -E "set\s*\(\s*CROSS_COMPILE\s+" "$toolchain_file" | head -1)
-    
-    if [ -n "$cross_compile_line" ]; then
-        # 使用 sed 提取前缀，支持带引号和不带引号的格式
-        local prefix
-        # 匹配格式: set( CROSS_COMPILE aarch64-linux-gnu- ) 或 set(CROSS_COMPILE "aarch64-linux-gnu-")
-        prefix=$(echo "$cross_compile_line" | sed -E 's/.*set\s*\(\s*CROSS_COMPILE\s+["]?([a-zA-Z0-9_-]+)-["]?\s*\).*/\1/')
-        
-        if [ -n "$prefix" ] && [ "$prefix" != "$cross_compile_line" ]; then
-            normalize_cross_prefix "$prefix"
-        else
-            echo ""
-        fi
-    else
-        # 如果未找到，返回空字符串（使用系统默认工具）
+
+    local prefix
+    prefix=$(grep -E "CROSS_COMPILE" "$toolchain_file" | head -n1 | sed -E 's/.*CROSS_COMPILE[[:space:]]+\"?([A-Za-z0-9_-]+)\-?\"?.*/\1/')
+
+    if [ -z "$prefix" ]; then
         echo ""
+        return 0
     fi
+
+    normalize_cross_prefix "$prefix"
 }
 
 # 通用构建函数
@@ -118,74 +90,65 @@ build_target_common() {
     local toolchain_file="$2"
     local output_dir="$3"
     local is_android="$4"
-    
+
     log_info "构建目标: $target_name..."
-    
-    # 创建输出目录
+
     mkdir -p "$output_dir"
-    
-    # 创建构建目录
-    local build_dir="${MPP_SOURCE_DIR}/build_${target_name}"
+
+    local build_dir
     if [ "$is_android" = "true" ]; then
         build_dir="${MPP_SOURCE_DIR}/build/build_${target_name}"
+    else
+        build_dir="${MPP_SOURCE_DIR}/build_${target_name}"
     fi
-    
-    rm -rf "$build_dir"  # 清理旧的构建目录
+
+    rm -rf "$build_dir"
     mkdir -p "$build_dir"
-    
-    # 进入构建目录
+
     cd "$build_dir"
-    
-    # 配置CMake参数
+
     local cmake_args=()
     if [ "$is_android" = "true" ]; then
-        # Android构建参数
         init_android_env "$target_name"
         local android_toolchain="$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake"
         if [ ! -f "$android_toolchain" ]; then
             log_error "Android NDK CMake toolchain not found: $android_toolchain"
             return 1
         fi
-        
+
         cmake_args+=(
             -DCMAKE_TOOLCHAIN_FILE="$android_toolchain"
             -DANDROID_ABI="$ANDROID_ABI"
             -DANDROID_PLATFORM="android-$API_LEVEL"
         )
     else
-        # 普通交叉编译参数
         cmake_args+=(
             -DCMAKE_TOOLCHAIN_FILE="$toolchain_file"
         )
     fi
-    
+
     cmake_args+=(
         "-DCMAKE_BUILD_TYPE=$BUILD_TYPE"
         "-DCMAKE_INSTALL_PREFIX=$output_dir"
         -DBUILD_SHARED_LIBS=ON
         -DBUILD_TEST=OFF
     )
-    
-    # 配置CMake
+
     if [ "$is_android" = "true" ]; then
         cmake ../.. "${cmake_args[@]}"
     else
         cmake .. "${cmake_args[@]}"
     fi
-    
     check_command_result $? "CMake configuration failed for $target_name"
-    
-    # 编译
-    make -j$(nproc)
+
+    make -j"$(nproc)"
     check_command_result $? "Build failed for $target_name"
-    
-    # 安装
+
     make install
     check_command_result $? "Install failed for $target_name"
-    
+
     log_success "$target_name 构建完成"
-    
-    # 压缩库文件（仅在 Release 构建时执行）
+
     if [ "$BUILD_TYPE_LOWER" = "release" ]; then
         if [ "$is_android" = "true" ]; then
             compress_android_libraries "$output_dir" "$target_name" "$build_dir"
@@ -197,13 +160,18 @@ build_target_common() {
             fi
             local available_tools
             available_tools=$(check_cross_compile_tools "$cross_prefix" "$target_name" "$build_dir" "$toolchain_file")
-            compress_libraries "$output_dir" "$target_name" "$available_tools"
+            compress_artifacts_in_dir \
+                "$output_dir" \
+                "$target_name" \
+                "$available_tools" \
+                --locale zh \
+                --allow-upx \
+                --summary-label "${target_name} 压缩统计:"
         fi
     else
         log_info "Debug 构建类型，跳过库压缩"
     fi
-    
-    # 返回到工作目录
+
     cd "$WORKSPACE_DIR"
 }
 
@@ -240,7 +208,13 @@ compress_android_libraries() {
     local available_tools
     available_tools=$(check_cross_compile_tools "$cross_prefix" "$target_name" "$build_dir" "")
 
-    compress_libraries "$output_dir" "$target_name" "$available_tools"
+    compress_artifacts_in_dir \
+        "$output_dir" \
+        "$target_name" \
+        "$available_tools" \
+        --locale zh \
+        --allow-upx \
+        --summary-label "${target_name} 压缩统计:"
 }
 
 # 编译函数
@@ -249,150 +223,6 @@ build_target() {
     local toolchain_file="$2"
     local output_dir="$3"
     build_target_common "$target_name" "$toolchain_file" "$output_dir" "false"
-}
-
-# 压缩单个库文件
-compress_single_library() {
-    local lib_file="$1"
-    local strip_cmd="$2"
-    local objcopy_cmd="$3"
-    
-    local original_size
-    original_size=$(stat -c%s "$lib_file" 2>/dev/null || echo "0")
-    
-    local final_size=$original_size
-    local compression_method="none"
-    local compression_applied=false
-    
-    log_info "  处理: $(basename "$lib_file") (${original_size} 字节)" >&2
-    
-    # 使用 strip 工具移除符号表
-    if [ -n "$strip_cmd" ]; then
-        local backup_file="${lib_file}.backup"
-        cp "$lib_file" "$backup_file"
-        
-        log_info "    使用 $strip_cmd 移除符号表..." >&2
-        
-        # 根据文件类型使用不同的 strip 参数
-        if [[ "$lib_file" == *.so* ]]; then
-            "$strip_cmd" --strip-unneeded "$lib_file" 2>/dev/null || true
-        else
-            "$strip_cmd" --strip-debug "$lib_file" 2>/dev/null || true
-        fi
-        
-        local stripped_size
-        stripped_size=$(stat -c%s "$lib_file" 2>/dev/null || echo "$original_size")
-        
-        if [ "$stripped_size" -lt "$original_size" ]; then
-            final_size=$stripped_size
-            compression_method="strip"
-            compression_applied=true
-            rm -f "$backup_file"
-            local strip_reduction
-            strip_reduction=$(( (original_size - stripped_size) * 100 / original_size ))
-            log_success "      移除 ${strip_reduction}% 符号 ($strip_cmd)" >&2
-        else
-            mv "$backup_file" "$lib_file"
-            log_info "      Strip 操作无效" >&2
-        fi
-    fi
-    
-    # 使用 objcopy 进一步优化
-    if [ -n "$objcopy_cmd" ] && [ "$compression_applied" = "true" ]; then
-        log_info "    使用 $objcopy_cmd 优化..." >&2
-        if "$objcopy_cmd" --remove-section=.comment --remove-section=.note "$lib_file" 2>/dev/null; then
-            local objcopy_size
-            objcopy_size=$(stat -c%s "$lib_file" 2>/dev/null || echo "$final_size")
-            if [ "$objcopy_size" -lt "$final_size" ]; then
-                final_size=$objcopy_size
-                compression_method="${compression_method}+objcopy"
-                log_info "      objcopy 优化完成" >&2
-            fi
-        fi
-    fi
-    
-    if [ "$compression_applied" = "true" ]; then
-        local total_reduction
-        total_reduction=$(( (original_size - final_size) * 100 / original_size ))
-        log_success "    最终: $original_size → $final_size 字节 (-${total_reduction}%, ${compression_method#none+})" >&2
-    else
-        log_info "    未应用压缩" >&2
-    fi
-    
-    echo "$final_size:$compression_applied"
-}
-
-# 通用库文件压缩函数
-compress_libraries() {
-    local output_dir="$1"
-    local target_name="$2"
-    local available_tools="$3"
-    
-    log_info "压缩 $target_name 的库文件..."
-    
-    # 解析可用工具
-    local strip_cmd=""
-    local objcopy_cmd=""
-    
-    if [ -n "$available_tools" ]; then
-        strip_cmd=$(echo "$available_tools" | grep -o "strip:[^ ]*" | cut -d: -f2)
-        objcopy_cmd=$(echo "$available_tools" | grep -o "objcopy:[^ ]*" | cut -d: -f2)
-    fi
-    
-    # 显示可用的工具
-    if [ -n "$strip_cmd" ] || [ -n "$objcopy_cmd" ]; then
-        log_info "可用压缩工具:"
-        [ -n "$strip_cmd" ] && log_info "  Strip: $strip_cmd"
-        [ -n "$objcopy_cmd" ] && log_info "  Objcopy: $objcopy_cmd"
-    else
-        log_warning "未找到可用的压缩工具，跳过压缩"
-        return 0
-    fi
-    
-    # 查找所有 .so 和 .a 文件
-    local lib_files
-    lib_files=$(find "$output_dir" -type f \( -name "*.so*" -o -name "*.a" \) 2>/dev/null || true)
-    
-    if [ -z "$lib_files" ]; then
-        log_warning "在 $output_dir 中未找到库文件"
-        return 0
-    fi
-    
-    local compressed_count=0
-    local total_original_size=0
-    local total_compressed_size=0
-    
-    while IFS= read -r lib_file; do
-        [ -z "$lib_file" ] && continue
-        
-        local original_size
-        original_size=$(stat -c%s "$lib_file" 2>/dev/null || echo "0")
-        total_original_size=$((total_original_size + original_size))
-        
-        local result
-        result=$(compress_single_library "$lib_file" "$strip_cmd" "$objcopy_cmd")
-        local final_size="${result%%:*}"
-        local compression_applied="${result##*:}"
-        
-        total_compressed_size=$((total_compressed_size + final_size))
-        
-        if [ "$compression_applied" = "true" ]; then
-            compressed_count=$((compressed_count + 1))
-        fi
-        
-    done <<< "$lib_files"
-    
-    # 显示压缩统计
-    if [ "$compressed_count" -gt 0 ]; then
-        local total_reduction
-        total_reduction=$(( (total_original_size - total_compressed_size) * 100 / total_original_size ))
-        log_success "$target_name 压缩统计:"
-        log_success "  处理文件数: $(echo "$lib_files" | wc -l)"
-        log_success "  优化文件数: $compressed_count"
-        log_success "  总大小: $total_original_size → $total_compressed_size 字节 (-${total_reduction}%)"
-    else
-        log_info "$target_name 未实现显著压缩 (文件可能已优化)"
-    fi
 }
 
 # Android环境初始化
@@ -700,7 +530,7 @@ main() {
     log_info "当前构建类型: $BUILD_TYPE"
     
     # 检查工具
-    check_tools
+    ensure_tools_available git cmake make
     
     # 克隆源码
     clone_mpp

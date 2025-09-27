@@ -44,19 +44,6 @@ ORIGINAL_RKMPP_PATH="${RKMPP_PATH:-}"
 ORIGINAL_RKRGA_PATH="${RKRGA_PATH:-}"
 ORIGINAL_LIBDRM_PATH="${LIBDRM_PATH:-}"
 
-# 检查必要的工具
-
-# 检查必要的工具
-check_tools() {
-    local tools=("git" "make")
-    for tool in "${tools[@]}"; do
-        if ! command -v "$tool" &> /dev/null; then
-            log_error "Missing required tool: $tool"
-            exit 1
-        fi
-    done
-}
-
 # 克隆 ffmpeg-rockchip 源码
 clone_ffmpeg() {
     log_info "Checking ffmpeg-rockchip repository..."
@@ -706,7 +693,13 @@ execute_build_process() {
             cross_prefix=$(get_cross_tools "$target_name")
             local available_tools
             available_tools=$(check_cross_compile_tools "$cross_prefix" "$target_name" "$FFMPEG_SOURCE_DIR" "")
-            compress_libraries "$output_dir" "$target_name" "$available_tools"
+            compress_artifacts_in_dir \
+                "$output_dir" \
+                "$target_name" \
+                "$available_tools" \
+                --locale zh \
+                --allow-upx \
+                --summary-label "${target_name} 压缩统计:"
         fi
     fi
     
@@ -874,150 +867,6 @@ parse_arguments() {
     PARSED_TARGET="$target"
 }
 
-# 压缩单个库文件
-compress_single_library() {
-    local lib_file="$1"
-    local strip_cmd="$2"
-    local objcopy_cmd="$3"
-    
-    local original_size
-    original_size=$(stat -c%s "$lib_file" 2>/dev/null || echo "0")
-    
-    local final_size=$original_size
-    local compression_method="none"
-    local compression_applied=false
-    
-    log_info "  处理: $(basename "$lib_file") (${original_size} 字节)" >&2
-    
-    # 使用 strip 工具移除符号表
-    if [ -n "$strip_cmd" ]; then
-        local backup_file="${lib_file}.backup"
-        cp "$lib_file" "$backup_file"
-        
-    log_info "    使用 $strip_cmd 移除符号表..." >&2
-        
-        # 根据文件类型使用不同的 strip 参数
-        if [[ "$lib_file" == *.so* ]]; then
-            "$strip_cmd" --strip-unneeded "$lib_file" 2>/dev/null || true
-        else
-            "$strip_cmd" --strip-debug "$lib_file" 2>/dev/null || true
-        fi
-        
-        local stripped_size
-        stripped_size=$(stat -c%s "$lib_file" 2>/dev/null || echo "$original_size")
-        
-        if [ "$stripped_size" -lt "$original_size" ]; then
-            final_size=$stripped_size
-            compression_method="strip"
-            compression_applied=true
-            rm -f "$backup_file"
-            local strip_reduction
-            strip_reduction=$(( (original_size - stripped_size) * 100 / original_size ))
-            log_success "      移除 ${strip_reduction}% 符号 ($strip_cmd)" >&2
-        else
-            mv "$backup_file" "$lib_file"
-            log_info "      Strip 操作无效" >&2
-        fi
-    fi
-    
-    # 使用 objcopy 进一步优化
-    if [ -n "$objcopy_cmd" ] && [ "$compression_applied" = "true" ]; then
-        log_info "    使用 $objcopy_cmd 优化..." >&2
-        if "$objcopy_cmd" --remove-section=.comment --remove-section=.note "$lib_file" 2>/dev/null; then
-            local objcopy_size
-            objcopy_size=$(stat -c%s "$lib_file" 2>/dev/null || echo "$final_size")
-            if [ "$objcopy_size" -lt "$final_size" ]; then
-                final_size=$objcopy_size
-                compression_method="${compression_method}+objcopy"
-                log_info "      objcopy 优化完成" >&2
-            fi
-        fi
-    fi
-    
-    if [ "$compression_applied" = "true" ]; then
-        local total_reduction
-        total_reduction=$(( (original_size - final_size) * 100 / original_size ))
-        log_success "    最终: $original_size → $final_size 字节 (-${total_reduction}%, ${compression_method#none+})" >&2
-    else
-        log_info "    未应用压缩" >&2
-    fi
-    
-    echo "$final_size:$compression_applied"
-}
-
-# 通用库文件压缩函数
-compress_libraries() {
-    local output_dir="$1"
-    local target_name="$2"
-    local available_tools="$3"
-    
-    log_info "压缩 $target_name 的库文件..."
-    
-    # 解析可用工具
-    local strip_cmd=""
-    local objcopy_cmd=""
-    
-    if [ -n "$available_tools" ]; then
-        strip_cmd=$(echo "$available_tools" | grep -o "strip:[^ ]*" | cut -d: -f2)
-        objcopy_cmd=$(echo "$available_tools" | grep -o "objcopy:[^ ]*" | cut -d: -f2)
-    fi
-    
-    # 显示可用的工具
-    if [ -n "$strip_cmd" ] || [ -n "$objcopy_cmd" ]; then
-        log_info "可用压缩工具:"
-        [ -n "$strip_cmd" ] && log_info "  Strip: $strip_cmd"
-        [ -n "$objcopy_cmd" ] && log_info "  Objcopy: $objcopy_cmd"
-    else
-        log_warning "未找到可用的压缩工具，跳过压缩"
-        return 0
-    fi
-    
-    # 查找所有 .so 和 .a 文件
-    local lib_files
-    lib_files=$(find "$output_dir" -type f \( -name "*.so*" -o -name "*.a" \) 2>/dev/null || true)
-    
-    if [ -z "$lib_files" ]; then
-        log_warning "在 $output_dir 中未找到库文件"
-        return 0
-    fi
-    
-    local compressed_count=0
-    local total_original_size=0
-    local total_compressed_size=0
-    
-    while IFS= read -r lib_file; do
-        [ -z "$lib_file" ] && continue
-        
-        local original_size
-        original_size=$(stat -c%s "$lib_file" 2>/dev/null || echo "0")
-        total_original_size=$((total_original_size + original_size))
-        
-        local result
-        result=$(compress_single_library "$lib_file" "$strip_cmd" "$objcopy_cmd")
-        local final_size="${result%%:*}"
-        local compression_applied="${result##*:}"
-        
-        total_compressed_size=$((total_compressed_size + final_size))
-        
-        if [ "$compression_applied" = "true" ]; then
-            compressed_count=$((compressed_count + 1))
-        fi
-        
-    done <<< "$lib_files"
-    
-    # 显示压缩统计
-    if [ "$compressed_count" -gt 0 ]; then
-        local total_reduction
-        total_reduction=$(( (total_original_size - total_compressed_size) * 100 / total_original_size ))
-        log_success "$target_name 压缩统计:"
-        log_success "  处理文件数: $(echo "$lib_files" | wc -l)"
-        log_success "  优化文件数: $compressed_count"
-        log_success "  总大小: $total_original_size → $total_compressed_size 字节 (-${total_reduction}%)"
-    else
-        log_info "$target_name 未实现显著压缩 (文件可能已优化)"
-    fi
-}
-
 # Android库文件压缩（使用通用压缩函数）
 compress_android_libraries() {
     local output_dir="$1"
@@ -1044,7 +893,13 @@ compress_android_libraries() {
     local available_tools
     available_tools=$(check_cross_compile_tools "$cross_prefix" "$target_name" "$build_dir" "")
 
-    compress_libraries "$output_dir" "$target_name" "$available_tools"
+    compress_artifacts_in_dir \
+        "$output_dir" \
+        "$target_name" \
+        "$available_tools" \
+        --locale zh \
+        --allow-upx \
+        --summary-label "${target_name} 压缩统计:"
 }
 
 # 创建版本信息文件
@@ -1089,7 +944,7 @@ main() {
     log_info "Starting FFmpeg Rockchip build process (build type: $BUILD_TYPE)..."
     
     # 检查必要工具
-    check_tools
+    ensure_tools_available git make
     
     # 克隆源码
     clone_ffmpeg
