@@ -16,6 +16,12 @@ RKMPP_OUTPUT_DIR="${OUTPUTS_DIR}/rkmpp"
 # mpp 源码目录
 MPP_SOURCE_DIR="${SOURCES_DIR}/rkmpp"
 
+# 默认构建类型设置
+BUILD_TYPE="Release"
+BUILD_TYPE_LOWER="release"
+BUILD_TYPE_SET="false"
+PARSED_TARGET=""
+
 # 限制默认编译目标
 _DEFAULT_BUILD_TARGETS="aarch64-linux-gnu,arm-linux-gnueabihf,aarch64-linux-android,arm-linux-android"
 
@@ -123,6 +129,37 @@ normalize_cross_prefix() {
     fi
 
     echo "$prefix"
+}
+
+# 设置构建类型参数
+set_build_type_from_arg() {
+    local input="$1"
+
+    if [ -z "$input" ]; then
+        log_error "--build_type requires a value (Debug or Release)"
+        exit 1
+    fi
+
+    local normalized
+    normalized=$(echo "$input" | tr '[:upper:]' '[:lower:]')
+
+    case "$normalized" in
+        debug)
+            BUILD_TYPE="Debug"
+            BUILD_TYPE_LOWER="debug"
+            ;;
+        release)
+            BUILD_TYPE="Release"
+            BUILD_TYPE_LOWER="release"
+            ;;
+        *)
+            log_error "Invalid build type: $input (valid: Debug, Release)"
+            exit 1
+            ;;
+    esac
+
+    BUILD_TYPE_SET="true"
+    log_info "已选择构建类型: $BUILD_TYPE" >&2
 }
 
 # 校验工具路径是否存在并与预期前缀匹配
@@ -463,8 +500,8 @@ build_target_common() {
     fi
     
     cmake_args+=(
-        -DCMAKE_BUILD_TYPE=Release
-        -DCMAKE_INSTALL_PREFIX="$output_dir"
+        "-DCMAKE_BUILD_TYPE=$BUILD_TYPE"
+        "-DCMAKE_INSTALL_PREFIX=$output_dir"
         -DBUILD_SHARED_LIBS=ON
         -DBUILD_TEST=OFF
     )
@@ -488,18 +525,22 @@ build_target_common() {
     
     log_success "$target_name 构建完成"
     
-    # 压缩库文件
-    if [ "$is_android" = "true" ]; then
-        compress_android_libraries "$output_dir" "$target_name" "$build_dir"
-    else
-        local cross_prefix
-        cross_prefix=$(get_cross_compile_prefix "$toolchain_file")
-        if [ -z "$cross_prefix" ] && [ -n "$CROSS_COMPILE" ]; then
-            cross_prefix=$(normalize_cross_prefix "$CROSS_COMPILE")
+    # 压缩库文件（仅在 Release 构建时执行）
+    if [ "$BUILD_TYPE_LOWER" = "release" ]; then
+        if [ "$is_android" = "true" ]; then
+            compress_android_libraries "$output_dir" "$target_name" "$build_dir"
+        else
+            local cross_prefix
+            cross_prefix=$(get_cross_compile_prefix "$toolchain_file")
+            if [ -z "$cross_prefix" ] && [ -n "$CROSS_COMPILE" ]; then
+                cross_prefix=$(normalize_cross_prefix "$CROSS_COMPILE")
+            fi
+            local available_tools
+            available_tools=$(check_cross_compile_tools "$cross_prefix" "$target_name" "$build_dir" "$toolchain_file")
+            compress_libraries "$output_dir" "$target_name" "$available_tools"
         fi
-        local available_tools
-        available_tools=$(check_cross_compile_tools "$cross_prefix" "$target_name" "$build_dir" "$toolchain_file")
-        compress_libraries "$output_dir" "$target_name" "$available_tools"
+    else
+        log_info "Debug 构建类型，跳过库压缩"
     fi
     
     # 返回到工作目录
@@ -791,6 +832,22 @@ get_target_config() {
     esac
 }
 
+# 根据构建类型返回实际输出目录
+get_output_dir_for_build_type() {
+    local base_dir="$1"
+
+    if [ -z "$base_dir" ]; then
+        echo ""
+        return 0
+    fi
+
+    if [ "$BUILD_TYPE_LOWER" = "debug" ]; then
+        echo "${base_dir}-debug"
+    else
+        echo "$base_dir"
+    fi
+}
+
 # 获取默认编译目标列表
 get_default_build_targets() {
     # 如果私有变量不存在或为空，返回所有目标的配置
@@ -847,6 +904,24 @@ parse_arguments() {
     
     while [[ $# -gt 0 ]]; do
         case $1 in
+            --build_type)
+                if [ -z "${2:-}" ]; then
+                    log_error "--build_type requires a value (Debug or Release)"
+                    exit 1
+                fi
+                set_build_type_from_arg "$2"
+                shift 2
+                continue
+                ;;
+            --build_type=*)
+                set_build_type_from_arg "${1#*=}"
+                shift
+                continue
+                ;;
+            Debug|debug|Release|release)
+                log_error "请使用 --build_type 参数设置构建类型"
+                exit 1
+                ;;
             -*)
                 log_error "Unknown option: $1"
                 show_help
@@ -871,8 +946,8 @@ parse_arguments() {
         log_error "Valid targets: arm-linux-gnueabihf, aarch64-linux-gnu, arm-linux-musleabihf, riscv64-linux-gnu, riscv64-linux-musl, aarch64-linux-musl, aarch64-linux-android, arm-linux-android, x86_64-linux-gnu, x86_64-windows-gnu, x86_64-macos, aarch64-macos"
         exit 1
     fi
-    
-    echo "$target"
+
+    PARSED_TARGET="$target"
 }
 
 # 构建单个目标
@@ -890,11 +965,14 @@ build_single_target() {
     fi
     
     IFS=':' read -r target_name toolchain_file output_dir <<< "$target_config"
+    local effective_output_dir
+    effective_output_dir=$(get_output_dir_for_build_type "$output_dir")
+    log_info "输出目录: $effective_output_dir"
     
     # 检查是否为Android目标
     if [[ "$target_to_build" == "aarch64-linux-android" || "$target_to_build" == "arm-linux-android" ]]; then
         # Android目标使用专门的构建函数
-        if build_android_target "$target_name" "$output_dir"; then
+        if build_android_target "$target_name" "$effective_output_dir"; then
             log_success "$target_to_build 构建完成"
         else
             log_error "$target_to_build 构建失败"
@@ -909,7 +987,7 @@ build_single_target() {
         fi
         
         # 构建目标
-        if build_target "$target_name" "$toolchain_file" "$output_dir"; then
+        if build_target "$target_name" "$toolchain_file" "$effective_output_dir"; then
             log_success "$target_to_build 构建完成"
         else
             log_error "$target_to_build 构建失败"
@@ -940,11 +1018,14 @@ build_multiple_targets() {
         [ -z "$target_config" ] && continue
         
         IFS=':' read -r target_name toolchain_file output_dir <<< "$target_config"
+        local effective_output_dir
+        effective_output_dir=$(get_output_dir_for_build_type "$output_dir")
+        log_info "输出目录: $effective_output_dir"
         
         # 检查是否为Android目标
         if [[ "$target_name" == "aarch64-linux-android" || "$target_name" == "arm-linux-android" ]]; then
             # Android目标使用专门的构建函数
-            if ! build_android_target "$target_name" "$output_dir"; then
+            if ! build_android_target "$target_name" "$effective_output_dir"; then
                 log_warning "$target_name 构建失败，继续下一个目标"
                 continue
             fi
@@ -956,7 +1037,7 @@ build_multiple_targets() {
             fi
             
             # 构建目标
-            if ! build_target "$target_name" "$toolchain_file" "$output_dir"; then
+            if ! build_target "$target_name" "$toolchain_file" "$effective_output_dir"; then
                 log_warning "$target_name 构建失败，继续下一个目标"
                 continue
             fi
@@ -966,9 +1047,10 @@ build_multiple_targets() {
 
 # 主函数
 main() {
-    local target_to_build="$1"
+    local target_to_build="${1:-$PARSED_TARGET}"
     
     log_info "开始 RK MPP 构建过程..."
+    log_info "当前构建类型: $BUILD_TYPE"
     
     # 检查工具
     check_tools
@@ -1089,9 +1171,10 @@ show_help() {
     echo "  aarch64-macos          Build ARM 64-bit macOS version"
     echo ""
     echo "Options:"
-    echo "  -h, --help     Show this help message"
-    echo "  -c, --clean    Clean build directories only"
-    echo "  --clean-all    Clean all (sources and outputs)"
+    echo "  -h, --help             Show this help message"
+    echo "  -c, --clean            Clean build directories only"
+    echo "  --clean-all            Clean all (sources and outputs)"
+    echo "  --build_type=TYPE      Specify CMake build type (Debug or Release, default: Release)"
     echo ""
     echo "Environment Variables:"
     echo "  TOOLCHAIN_ROOT_DIR    Path to cross-compilation toolchain (optional)"
@@ -1106,6 +1189,7 @@ show_help() {
     echo "  $0 x86_64-linux-gnu   # Build x86_64 Linux version"
     echo "  $0 --clean           # Clean build directories"
     echo "  $0 --clean-all       # Clean everything"
+    echo "  $0 --build_type Debug aarch64-linux-gnu  # Build Debug variant for ARM64"
     echo ""
 }
 
@@ -1128,8 +1212,8 @@ case "${1:-}" in
         ;;
     *)
         # 解析参数并执行主函数
-        TARGET_TO_BUILD=$(parse_arguments "$@")
-        main "$TARGET_TO_BUILD"
+        parse_arguments "$@"
+        main "$PARSED_TARGET"
         ;;
 esac
 

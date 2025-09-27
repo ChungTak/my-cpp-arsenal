@@ -18,6 +18,49 @@ LIBDRM_VERSION="2.4.125"
 LIBDRM_SOURCE_DIR="${SOURCES_DIR}/libdrm"
 PROJECT_ROOT_DIR="${SCRIPT_DIR}"
 
+# 默认构建类型配置
+BUILD_TYPE="Release"
+BUILD_TYPE_LOWER="release"
+BUILD_TYPE_SET="false"
+PARSED_TARGET=""
+
+set_build_type_from_arg() {
+    local value="$1"
+
+    if [ -z "$value" ]; then
+        log_error "Missing value for --build_type"
+        exit 1
+    fi
+
+    local normalized
+    normalized=$(echo "$value" | tr '[:upper:]' '[:lower:]')
+
+    case "$normalized" in
+        debug)
+            if [ "$BUILD_TYPE_SET" = "true" ] && [ "$BUILD_TYPE_LOWER" != "debug" ]; then
+                log_error "Conflicting build type arguments detected"
+                exit 1
+            fi
+            BUILD_TYPE="Debug"
+            BUILD_TYPE_LOWER="debug"
+            BUILD_TYPE_SET="true"
+            ;;
+        release)
+            if [ "$BUILD_TYPE_SET" = "true" ] && [ "$BUILD_TYPE_LOWER" != "release" ]; then
+                log_error "Conflicting build type arguments detected"
+                exit 1
+            fi
+            BUILD_TYPE="Release"
+            BUILD_TYPE_LOWER="release"
+            BUILD_TYPE_SET="true"
+            ;;
+        *)
+            log_error "Invalid build type value: $value (expected Debug or Release)"
+            exit 1
+            ;;
+    esac
+}
+
 # 限制默认编译目标
 _DEFAULT_BUILD_TARGETS="aarch64-linux-gnu,arm-linux-gnueabihf,aarch64-linux-android,arm-linux-android"
 
@@ -101,6 +144,17 @@ get_cross_compile_prefix() {
             echo ""
             ;;
     esac
+}
+
+# 根据构建类型调整输出目录后缀
+get_output_dir_for_build_type() {
+    local base_dir="$1"
+
+    if [ "$BUILD_TYPE_LOWER" = "debug" ]; then
+        echo "${base_dir}-debug"
+    else
+        echo "$base_dir"
+    fi
 }
 
 # 检查交叉编译工具是否可用
@@ -664,7 +718,7 @@ execute_libdrm_build() {
     log_info "Executing libdrm build for $target_name..."
     
     # 配置Meson - 强制使用交叉编译文件
-    local MESON_CMD="meson setup $build_dir $LIBDRM_SOURCE_DIR -Dprefix=$output_dir -Dbuildtype=release -Dlibdir=lib"
+    local MESON_CMD="meson setup $build_dir $LIBDRM_SOURCE_DIR -Dprefix=$output_dir -Dbuildtype=${BUILD_TYPE_LOWER} -Dlibdir=lib"
     if [ -n "$cross_file" ] && [ -f "$cross_file" ]; then
         MESON_CMD="$MESON_CMD --cross-file=$cross_file"
         log_info "Using cross-file: $cross_file"
@@ -702,15 +756,19 @@ execute_libdrm_build() {
     log_success "$target_name build completed successfully"
     
     # 压缩库文件
-    if [ "$is_android" = "true" ]; then
-        compress_android_libraries "$output_dir" "$target_name"
+    if [ "$BUILD_TYPE_LOWER" = "release" ]; then
+        if [ "$is_android" = "true" ]; then
+            compress_android_libraries "$output_dir" "$target_name"
+        else
+            # 对于非Android目标，需要重新检测可用的工具
+            local cross_prefix
+            cross_prefix=$(get_cross_compile_prefix "$target_name")
+            local available_tools
+            available_tools=$(check_cross_compile_tools "$cross_prefix" "$target_name")
+            compress_libraries "$output_dir" "$target_name" "$available_tools"
+        fi
     else
-        # 对于非Android目标，需要重新检测可用的工具
-        local cross_prefix
-        cross_prefix=$(get_cross_compile_prefix "$target_name")
-        local available_tools
-        available_tools=$(check_cross_compile_tools "$cross_prefix" "$target_name")
-        compress_libraries "$output_dir" "$target_name" "$available_tools"
+        log_info "Skipping library compression for Debug build type"
     fi
     
     # 验证构建架构
@@ -768,7 +826,7 @@ build_target() {
     meson_options=$(get_meson_options "$target_arch" false)
     
     # 配置Meson
-    local MESON_CMD="meson setup $build_dir $LIBDRM_SOURCE_DIR -Dprefix=$output_dir -Dbuildtype=release -Dlibdir=lib"
+    local MESON_CMD="meson setup $build_dir $LIBDRM_SOURCE_DIR -Dprefix=$output_dir -Dbuildtype=${BUILD_TYPE_LOWER} -Dlibdir=lib"
     if [ -n "$CROSS_FILE" ]; then
         MESON_CMD="$MESON_CMD --cross-file=$CROSS_FILE"
     fi
@@ -1115,8 +1173,30 @@ validate_target() {
 parse_arguments() {
     local target=""
     
+    BUILD_TYPE="Release"
+    BUILD_TYPE_LOWER="release"
+    BUILD_TYPE_SET="false"
+    
     while [[ $# -gt 0 ]]; do
         case $1 in
+            --build_type)
+                if [ -z "${2:-}" ]; then
+                    log_error "--build_type requires a value (Debug or Release)"
+                    exit 1
+                fi
+                set_build_type_from_arg "$2"
+                shift 2
+                continue
+                ;;
+            --build_type=*)
+                set_build_type_from_arg "${1#*=}"
+                shift
+                continue
+                ;;
+            Debug|debug|Release|release)
+                log_error "Build type must be specified using --build_type"
+                exit 1
+                ;;
             -*)
                 log_error "Unknown option: $1"
                 show_help
@@ -1142,7 +1222,7 @@ parse_arguments() {
         exit 1
     fi
     
-    echo "$target"
+    PARSED_TARGET="$target"
 }
 
 # 主函数
@@ -1150,6 +1230,7 @@ main() {
     local target_to_build="$1"
     
     log_info "Starting libdrm build process..."
+    log_info "Selected build type: $BUILD_TYPE"
     
     # 检查工具
     check_tools
@@ -1173,11 +1254,14 @@ main() {
         fi
         
         IFS=':' read -r target_name toolchain_file output_dir <<< "$target_config"
+        local effective_output_dir
+        effective_output_dir=$(get_output_dir_for_build_type "$output_dir")
+        log_info "Resolved output directory: $effective_output_dir"
         
         # 检查是否为Android目标
             if [[ "$target_to_build" == *"-android" ]]; then
             # Android目标使用专门的构建函数
-            if build_android_target "$target_name" "$output_dir"; then
+            if build_android_target "$target_name" "$effective_output_dir"; then
                 log_success "$target_to_build build completed successfully"
             else
                 log_error "Failed to build $target_to_build"
@@ -1185,7 +1269,7 @@ main() {
             fi
         else
             # 构建目标 - 不再检查 CMake 工具链文件
-            if build_target "$target_name" "$toolchain_file" "$output_dir"; then
+            if build_target "$target_name" "$toolchain_file" "$effective_output_dir"; then
                 log_success "$target_to_build build completed successfully"
             else
                 log_error "Failed to build $target_to_build"
@@ -1218,17 +1302,20 @@ main() {
             [ -z "$target_config" ] && continue
             
             IFS=':' read -r target_name toolchain_file output_dir <<< "$target_config"
+            local effective_output_dir
+            effective_output_dir=$(get_output_dir_for_build_type "$output_dir")
+            log_info "Resolved output directory: $effective_output_dir"
             
             # 检查是否为Android目标
             if [[ "$target_name" == *"-android" ]]; then
                 # Android目标使用专门的构建函数
-                if ! build_android_target "$target_name" "$output_dir"; then
+                if ! build_android_target "$target_name" "$effective_output_dir"; then
                     log_warning "Failed to build $target_name, continuing with next target"
                     continue
                 fi
             else
                 # 构建目标 - 不再检查 CMake 工具链文件
-                if ! build_target "$target_name" "$toolchain_file" "$output_dir"; then
+                if ! build_target "$target_name" "$toolchain_file" "$effective_output_dir"; then
                     log_warning "Failed to build $target_name, continuing with next target"
                     continue
                 fi
@@ -1501,6 +1588,7 @@ show_help() {
     echo "  arm-linux-android      Build Android ARM 32-bit version"
     echo ""
     echo "Options:"
+    echo "  --build_type {Debug|Release}  Set build configuration (default: Release)"
     echo "  -h, --help     Show this help message"
     echo "  -c, --clean    Clean build directories only"
     echo "  --clean-all    Clean all (sources and outputs)"
@@ -1510,11 +1598,12 @@ show_help() {
     echo "  ANDROID_NDK_HOME      Path to Android NDK (default: ~/sdk/android_ndk/android-ndk-r25c)"
     echo ""
     echo "Examples:"
-    echo "  $0                    # Build default targets (aarch64-linux-gnu, arm-linux-gnueabihf, aarch64-linux-android, arm-linux-android)"
-    echo "  $0 aarch64-linux-gnu  # Build only ARM 64-bit glibc version"
-    echo "  $0 arm-linux-musleabihf # Build only ARM 32-bit musl version"
-    echo "  $0 aarch64-linux-android # Build Android ARM 64-bit version"
-    echo "  $0 arm-linux-android  # Build Android ARM 32-bit version"
+    echo "  $0                                # Build default targets in Release configuration"
+    echo "  $0 --build_type Debug             # Build default targets in Debug configuration"
+    echo "  $0 --build_type Release aarch64-linux-gnu  # Release build for aarch64-linux-gnu"
+    echo "  $0 --build_type Debug arm-linux-musleabihf # Debug build for arm-linux-musleabihf"
+    echo "  $0 aarch64-linux-android          # Release build for Android ARM 64-bit"
+    echo "  $0 --build_type Debug aarch64-linux-android # Debug build for Android ARM 64-bit"
     echo "  $0 --clean           # Clean build directories"
     echo "  $0 --clean-all       # Clean everything"
     echo ""
@@ -1571,7 +1660,7 @@ case "${1:-}" in
         ;;
     *)
         # 解析参数并执行主函数
-        TARGET_TO_BUILD=$(parse_arguments "$@")
-        main "$TARGET_TO_BUILD"
+    parse_arguments "$@"
+    main "$PARSED_TARGET"
         ;;
 esac

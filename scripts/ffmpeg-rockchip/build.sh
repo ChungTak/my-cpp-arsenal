@@ -16,6 +16,15 @@ FFMPEG_OUTPUT_DIR="${OUTPUTS_DIR}/ffmpeg-rockchip"
 # ffmpeg-rockchip 源码目录
 FFMPEG_SOURCE_DIR="${SOURCES_DIR}/ffmpeg-rockchip"
 
+# 默认构建类型配置
+BUILD_TYPE="Release"
+BUILD_TYPE_LOWER="release"
+BUILD_TYPE_SET="false"
+PARSED_TARGET=""
+
+# 记录成功构建的输出目录
+declare -a COMPLETED_OUTPUT_DIRS=()
+
 # 限制默认编译目标
 _DEFAULT_BUILD_TARGETS="aarch64-linux-gnu,arm-linux-gnueabihf,aarch64-linux-android,arm-linux-android"
 
@@ -48,6 +57,58 @@ log_warning() {
 
 log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
+}
+
+set_build_type_from_arg() {
+    local value="$1"
+
+    if [ -z "$value" ]; then
+        log_error "Missing value for --build_type"
+        exit 1
+    fi
+
+    local normalized
+    normalized=$(echo "$value" | tr '[:upper:]' '[:lower:]')
+
+    case "$normalized" in
+        debug)
+            if [ "$BUILD_TYPE_SET" = "true" ] && [ "$BUILD_TYPE_LOWER" != "debug" ]; then
+                log_error "Conflicting build type arguments detected"
+                exit 1
+            fi
+            BUILD_TYPE="Debug"
+            BUILD_TYPE_LOWER="debug"
+            BUILD_TYPE_SET="true"
+            ;;
+        release)
+            if [ "$BUILD_TYPE_SET" = "true" ] && [ "$BUILD_TYPE_LOWER" != "release" ]; then
+                log_error "Conflicting build type arguments detected"
+                exit 1
+            fi
+            BUILD_TYPE="Release"
+            BUILD_TYPE_LOWER="release"
+            BUILD_TYPE_SET="true"
+            ;;
+        *)
+            log_error "Invalid build type value: $value (expected Debug or Release)"
+            exit 1
+            ;;
+    esac
+}
+
+get_output_dir_for_build_type() {
+    local base_dir="$1"
+
+    if [ -z "$base_dir" ]; then
+        echo ""
+        return 0
+    fi
+
+    if [ "$BUILD_TYPE_LOWER" = "debug" ]; then
+        echo "${base_dir}-debug"
+    else
+        echo "$base_dir"
+    fi
 }
 
 # 检查工具是否存在
@@ -417,6 +478,8 @@ check_dependency_built() {
     local target="$1"
     local dependency="$2"
     local dependency_dir="${OUTPUTS_DIR}/${dependency}/${target}"
+
+    dependency_dir=$(get_output_dir_for_build_type "$dependency_dir")
     
     # 检查依赖目录是否存在且包含必要的文件
     if [ -d "$dependency_dir" ]; then
@@ -464,8 +527,8 @@ build_dependency() {
     fi
     
     # 执行构建脚本，透传目标参数
-    log_info "Executing: $build_script $target"
-    if "$build_script" "$target"; then
+    log_info "Executing: $build_script --build_type $BUILD_TYPE $target"
+    if "$build_script" --build_type "$BUILD_TYPE" "$target"; then
         log_success "$dependency build completed successfully for $target"
         return 0
     else
@@ -628,6 +691,10 @@ setup_dependency_env() {
             libdrm_dir="${OUTPUTS_DIR}/libdrm"
             ;;
     esac
+
+    rkmpp_dir=$(get_output_dir_for_build_type "$rkmpp_dir")
+    rkrga_dir=$(get_output_dir_for_build_type "$rkrga_dir")
+    libdrm_dir=$(get_output_dir_for_build_type "$libdrm_dir")
     
     # 检查依赖是否都存在
     if [ ! -d "$rkmpp_dir" ]; then
@@ -977,6 +1044,10 @@ execute_build_process() {
     CONFIGURE_CMD="$CONFIGURE_CMD --pkg-config=pkg-config"
     CONFIGURE_CMD="$CONFIGURE_CMD --extra-cflags='$CFLAGS'"
     CONFIGURE_CMD="$CONFIGURE_CMD --extra-ldflags='$LDFLAGS'"
+
+    if [ "$BUILD_TYPE_LOWER" = "debug" ]; then
+        CONFIGURE_CMD="$CONFIGURE_CMD --enable-debug"
+    fi
     
     # 添加RockChip配置选项
     local RK_ONLY_OPTIONS
@@ -1017,14 +1088,18 @@ execute_build_process() {
     log_success "Target $target_name build completed successfully"
     
     # 压缩库文件
-    if [[ "$target_name" == *"-android" ]]; then
-        compress_android_libraries "$output_dir" "$target_name" "$FFMPEG_SOURCE_DIR"
+    if [ "$BUILD_TYPE_LOWER" = "debug" ]; then
+        log_info "Debug build type detected, skipping library compression"
     else
-        local cross_prefix
-        cross_prefix=$(get_cross_tools "$target_name")
-        local available_tools
-        available_tools=$(check_cross_compile_tools "$cross_prefix" "$target_name" "$FFMPEG_SOURCE_DIR" "")
-        compress_libraries "$output_dir" "$target_name" "$available_tools"
+        if [[ "$target_name" == *"-android" ]]; then
+            compress_android_libraries "$output_dir" "$target_name" "$FFMPEG_SOURCE_DIR"
+        else
+            local cross_prefix
+            cross_prefix=$(get_cross_tools "$target_name")
+            local available_tools
+            available_tools=$(check_cross_compile_tools "$cross_prefix" "$target_name" "$FFMPEG_SOURCE_DIR" "")
+            compress_libraries "$output_dir" "$target_name" "$available_tools"
+        fi
     fi
     
     # 返回到工作目录
@@ -1036,13 +1111,17 @@ execute_build_process() {
 # 构建单个目标
 build_target() {
     local target_name="$1"
-    local output_dir="$2"
+    local base_output_dir="$2"
     local build_status=0
+
+    local output_dir
+    output_dir=$(get_output_dir_for_build_type "$base_output_dir")
 
     trap 'reset_dependency_env' RETURN
     reset_dependency_env
     
     log_info "Building target: $target_name"
+    log_info "Resolved output directory: $output_dir"
     
     # 检查并构建依赖
     if ! check_and_build_dependencies "$target_name"; then
@@ -1054,6 +1133,7 @@ build_target() {
     if [[ "$target_name" == *"-android" ]]; then
         # Android目标使用专门的构建函数
         if build_android_target "$target_name" "$output_dir"; then
+            COMPLETED_OUTPUT_DIRS+=("$output_dir")
             return 0
         else
             return 1
@@ -1100,6 +1180,10 @@ build_target() {
         build_status=1
     fi
 
+    if [ $build_status -eq 0 ]; then
+        COMPLETED_OUTPUT_DIRS+=("$output_dir")
+    fi
+
     return $build_status
 }
 
@@ -1123,6 +1207,11 @@ get_default_build_targets() {
 # 解析命令行参数
 parse_arguments() {
     local target=""
+
+    BUILD_TYPE="Release"
+    BUILD_TYPE_LOWER="release"
+    BUILD_TYPE_SET="false"
+    PARSED_TARGET=""
     
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -1138,11 +1227,34 @@ parse_arguments() {
                 clean_all
                 exit 0
                 ;;
+            --build_type)
+                if [ -z "${2:-}" ]; then
+                    log_error "--build_type requires a value (Debug or Release)"
+                    exit 1
+                fi
+                set_build_type_from_arg "$2"
+                shift 2
+                continue
+                ;;
+            --build_type=*)
+                set_build_type_from_arg "${1#*=}"
+                shift
+                continue
+                ;;
+            Debug|debug|Release|release)
+                log_error "Build type must be specified using --build_type"
+                exit 1
+                ;;
+            -* )
+                log_error "Unknown option: $1"
+                show_help
+                exit 1
+                ;;
             *)
                 if [ -z "$target" ]; then
                     target="$1"
                 else
-                    log_error "Unknown argument: $1"
+                    log_error "Multiple targets specified. Only one target is allowed."
                     show_help
                     exit 1
                 fi
@@ -1150,8 +1262,8 @@ parse_arguments() {
         esac
         shift
     done
-    
-    echo "$target"
+
+    PARSED_TARGET="$target"
 }
 
 # 压缩单个库文件
@@ -1366,7 +1478,7 @@ EOF
 main() {
     local target_to_build="$1"
     
-    log_info "Starting FFmpeg Rockchip build process..."
+    log_info "Starting FFmpeg Rockchip build process (build type: $BUILD_TYPE)..."
     
     # 检查必要工具
     check_tools
@@ -1425,8 +1537,18 @@ main() {
         done <<< "$targets_to_build"
     fi
     
-    log_success "Build process completed!"
-    log_info "Output directory: $FFMPEG_OUTPUT_DIR"
+    log_success "Build process completed for build type: $BUILD_TYPE"
+
+    if [ ${#COMPLETED_OUTPUT_DIRS[@]} -gt 0 ]; then
+        log_info "Completed output directories:"
+        for dir in "${COMPLETED_OUTPUT_DIRS[@]}"; do
+            log_info "  - $dir"
+        done
+    else
+        log_warning "No targets were built."
+    fi
+    
+    log_info "Base output directory: $FFMPEG_OUTPUT_DIR"
     
     # 生成version.ini文件
     create_version_file
@@ -1486,23 +1608,22 @@ show_help() {
     echo "  aarch64-macos          Build ARM 64-bit macOS version"
     echo ""
     echo "Options:"
-    echo "  -h, --help     Show this help message"
-    echo "  -c, --clean    Clean build directories only"
-    echo "  --clean-all    Clean all (sources and outputs)"
+    echo "  -h, --help           Show this help message"
+    echo "  -c, --clean          Clean build directories only"
+    echo "  --clean-all          Clean all (sources and outputs)"
+    echo "  --build_type=TYPE    Build configuration: Release (default) or Debug"
     echo ""
     echo "Environment Variables:"
     echo "  TOOLCHAIN_ROOT_DIR    Path to cross-compilation toolchain (optional)"
     echo "  ANDROID_NDK_HOME      Path to Android NDK (default: ~/sdk/android_ndk/android-ndk-r25c)"
     echo ""
     echo "Examples:"
-    echo "  $0                    # Build default targets (aarch64-linux-gnu, arm-linux-gnueabihf, aarch64-linux-android, arm-linux-android)"
-    echo "  $0 aarch64-linux-gnu  # Build only ARM 64-bit glibc version"
-    echo "  $0 arm-linux-musleabihf # Build only ARM 32-bit musl version"
-    echo "  $0 aarch64-linux-android # Build Android ARM 64-bit version"
-    echo "  $0 arm-linux-android   # Build Android ARM 32-bit version"
-    echo "  $0 x86_64-linux-gnu   # Build x86_64 Linux version"
-    echo "  $0 --clean           # Clean build directories"
-    echo "  $0 --clean-all       # Clean everything"
+    echo "  $0                                   # Build default targets (aarch64-linux-gnu, arm-linux-gnueabihf, aarch64-linux-android, arm-linux-android)"
+    echo "  $0 --build_type=Debug                 # Build default targets with Debug configuration"
+    echo "  $0 aarch64-linux-gnu                  # Build only ARM 64-bit glibc version"
+    echo "  $0 aarch64-linux-gnu --build_type=Debug # Build ARM 64-bit glibc version with Debug configuration"
+    echo "  $0 --clean                            # Clean build directories"
+    echo "  $0 --clean-all                        # Clean everything"
     echo ""
 }
 
@@ -1524,8 +1645,7 @@ case "${1:-}" in
         exit 0
         ;;
     *)
-        # 解析参数并执行主函数
-        TARGET_TO_BUILD=$(parse_arguments "$@")
-        main "$TARGET_TO_BUILD"
+        parse_arguments "$@"
+        main "$PARSED_TARGET"
         ;;
 esac

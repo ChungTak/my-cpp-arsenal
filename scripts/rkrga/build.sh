@@ -13,6 +13,18 @@ OUTPUTS_DIR="${WORKSPACE_DIR}/outputs"
 RKRGA_OUTPUT_DIR="${OUTPUTS_DIR}/rkrga"
 LIBRGA_SOURCE_DIR="${SOURCES_DIR}/rkrga"
 
+# 构建类型默认配置
+BUILD_TYPE="Release"
+BUILD_TYPE_LOWER="release"
+BUILD_TYPE_SET="false"
+PARSED_TARGET=""
+
+# 默认构建类型配置
+BUILD_TYPE="Release"
+BUILD_TYPE_LOWER="release"
+BUILD_TYPE_SET="false"
+PARSED_TARGET=""
+
 # 限制默认编译目标
 _DEFAULT_BUILD_TARGETS="aarch64-linux-gnu,arm-linux-gnueabihf,aarch64-linux-android,arm-linux-android"
 
@@ -27,6 +39,80 @@ log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
 log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 log_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+
+set_build_type_from_arg() {
+    local value="$1"
+
+    if [ -z "$value" ]; then
+        log_error "Missing value for --build_type"
+        exit 1
+    fi
+
+    local normalized
+    normalized=$(echo "$value" | tr '[:upper:]' '[:lower:]')
+
+    case "$normalized" in
+        debug)
+            if [ "$BUILD_TYPE_SET" = "true" ] && [ "$BUILD_TYPE_LOWER" != "debug" ]; then
+                log_error "Conflicting build type arguments detected"
+                exit 1
+            fi
+            BUILD_TYPE="Debug"
+            BUILD_TYPE_LOWER="debug"
+            BUILD_TYPE_SET="true"
+            ;;
+        release)
+            if [ "$BUILD_TYPE_SET" = "true" ] && [ "$BUILD_TYPE_LOWER" != "release" ]; then
+                log_error "Conflicting build type arguments detected"
+                exit 1
+            fi
+            BUILD_TYPE="Release"
+            BUILD_TYPE_LOWER="release"
+            BUILD_TYPE_SET="true"
+            ;;
+        *)
+            log_error "Invalid build type value: $value (expected Debug or Release)"
+            exit 1
+            ;;
+    esac
+}
+
+set_build_type_from_arg() {
+    local value="$1"
+
+    if [ -z "$value" ]; then
+        log_error "Missing value for --build_type"
+        exit 1
+    fi
+
+    local normalized
+    normalized=$(echo "$value" | tr '[:upper:]' '[:lower:]')
+
+    case "$normalized" in
+        debug)
+            if [ "$BUILD_TYPE_SET" = "true" ] && [ "$BUILD_TYPE_LOWER" != "debug" ]; then
+                log_error "Conflicting build type arguments detected"
+                exit 1
+            fi
+            BUILD_TYPE="Debug"
+            BUILD_TYPE_LOWER="debug"
+            BUILD_TYPE_SET="true"
+            ;;
+        release)
+            if [ "$BUILD_TYPE_SET" = "true" ] && [ "$BUILD_TYPE_LOWER" != "release" ]; then
+                log_error "Conflicting build type arguments detected"
+                exit 1
+            fi
+            BUILD_TYPE="Release"
+            BUILD_TYPE_LOWER="release"
+            BUILD_TYPE_SET="true"
+            ;;
+        *)
+            log_error "Invalid build type value: $value (expected Debug or Release)"
+            exit 1
+            ;;
+    esac
+}
 
 # 检查工具
 check_tools() {
@@ -106,10 +192,23 @@ declare -A TARGET_CONFIGS=(
     ["aarch64-macos"]="aarch64-macos:${RKRGA_OUTPUT_DIR}/aarch64-macos:${OUTPUTS_DIR}/libdrm/aarch64-macos:aarch64-macos:AArch64"
 )
 
+# 记录成功构建的输出目录
+declare -a COMPLETED_OUTPUT_DIRS=()
+
 # 获取目标配置
 get_target_config() {
     local target="$1"
     echo "${TARGET_CONFIGS[$target]:-}"
+}
+
+get_output_dir_for_build_type() {
+    local base_dir="$1"
+
+    if [ "$BUILD_TYPE_LOWER" = "debug" ]; then
+        echo "${base_dir}-debug"
+    else
+        echo "$base_dir"
+    fi
 }
 
 # 检查并构建 libdrm 依赖
@@ -122,16 +221,19 @@ check_and_build_libdrm_dependency() {
         return 1
     fi
     
-    IFS=':' read -r target_name output_dir libdrm_dir cross_prefix expected_arch <<< "$config"
+    local cfg_target cfg_output_dir cfg_libdrm_dir cfg_cross_prefix cfg_expected_arch
+    IFS=':' read -r cfg_target cfg_output_dir cfg_libdrm_dir cfg_cross_prefix cfg_expected_arch <<< "$config"
+    local effective_libdrm_dir
+    effective_libdrm_dir=$(get_output_dir_for_build_type "$cfg_libdrm_dir")
     
     # 检查 libdrm 依赖目录是否存在
-    if [ -d "$libdrm_dir" ]; then
-        log_success "libdrm dependency already exists: $libdrm_dir"
+    if [ -d "$effective_libdrm_dir" ]; then
+        log_success "libdrm dependency already exists: $effective_libdrm_dir"
         return 0
     fi
     
-    log_info "libdrm dependency not found: $libdrm_dir"
-    log_info "Building libdrm dependency for target: $target_name"
+    log_info "libdrm dependency not found: $effective_libdrm_dir"
+    log_info "Building libdrm dependency for target: $cfg_target"
     
     # 检查 libdrm 构建脚本是否存在
     local libdrm_build_script="${WORKSPACE_DIR}/scripts/libdrm/build.sh"
@@ -141,19 +243,19 @@ check_and_build_libdrm_dependency() {
     fi
     
     # 调用 libdrm 构建脚本，透传目标参数
-    log_info "Executing: $libdrm_build_script $target_name"
-    if ! "$libdrm_build_script" "$target_name"; then
-        log_error "libdrm dependency build failed for target: $target_name"
+    log_info "Executing: $libdrm_build_script --build_type $BUILD_TYPE $cfg_target"
+    if ! "$libdrm_build_script" --build_type "$BUILD_TYPE" "$cfg_target"; then
+        log_error "libdrm dependency build failed for target: $cfg_target"
         return 1
     fi
     
     # 验证构建结果
-    if [ ! -d "$libdrm_dir" ]; then
-        log_error "libdrm dependency build completed but directory not found: $libdrm_dir"
+    if [ ! -d "$effective_libdrm_dir" ]; then
+        log_error "libdrm dependency build completed but directory not found: $effective_libdrm_dir"
         return 1
     fi
     
-    log_success "libdrm dependency built successfully: $libdrm_dir"
+    log_success "libdrm dependency built successfully: $effective_libdrm_dir"
     return 0
 }
 
@@ -167,32 +269,21 @@ setup_libdrm_dependency() {
     fi
     
     local config="${TARGET_CONFIGS[$target]:-}"
-    IFS=':' read -r target_name output_dir libdrm_dir cross_prefix expected_arch <<< "$config"
-    
-    export PKG_CONFIG_PATH="${libdrm_dir}/lib/pkgconfig:${PKG_CONFIG_PATH}"
-    export LD_LIBRARY_PATH="${libdrm_dir}/lib:${LD_LIBRARY_PATH}"
+    local cfg_target cfg_output_dir cfg_libdrm_dir cfg_cross_prefix cfg_expected_arch
+    IFS=':' read -r cfg_target cfg_output_dir cfg_libdrm_dir cfg_cross_prefix cfg_expected_arch <<< "$config"
+    local effective_libdrm_dir
+    effective_libdrm_dir=$(get_output_dir_for_build_type "$cfg_libdrm_dir")
+
+    export PKG_CONFIG_PATH="${effective_libdrm_dir}/lib/pkgconfig:${PKG_CONFIG_PATH}"
+    export LD_LIBRARY_PATH="${effective_libdrm_dir}/lib:${LD_LIBRARY_PATH}"
     log_success "libdrm dependency setup completed"
 }
 
 # 构建单个目标
 build_target() {
     local target_name="$1"
-    local output_dir="$2"
     
     log_info "Building target: $target_name"
-    
-    if ! setup_libdrm_dependency "$target_name"; then
-        return 1
-    fi
-    
-    mkdir -p "$output_dir"
-    local build_dir="${LIBRGA_SOURCE_DIR}/build_${target_name}"
-    rm -rf "$build_dir"
-    mkdir -p "$build_dir"
-    
-    # Meson 配置选项
-    local meson_options="--buildtype=release --default-library=shared --libdir=lib"
-    meson_options+=" -Dcpp_args=-fpermissive -Dlibdrm=true -Dlibrga_demo=false"
     
     # 获取目标配置
     local config="${TARGET_CONFIGS[$target_name]:-}"
@@ -201,7 +292,26 @@ build_target() {
         return 1
     fi
     
-    IFS=':' read -r target_name output_dir libdrm_dir cross_prefix expected_arch <<< "$config"
+    local base_output_dir cross_prefix expected_arch
+    IFS=':' read -r _ base_output_dir _ cross_prefix expected_arch <<< "$config"
+
+    local output_dir
+    output_dir=$(get_output_dir_for_build_type "$base_output_dir")
+
+    log_info "Resolved output directory: $output_dir"
+
+    if ! setup_libdrm_dependency "$target_name"; then
+        return 1
+    fi
+
+    mkdir -p "$output_dir"
+    local build_dir="${LIBRGA_SOURCE_DIR}/build_${target_name}"
+    rm -rf "$build_dir"
+    mkdir -p "$build_dir"
+    
+    # Meson 配置选项
+    local meson_options="--buildtype=${BUILD_TYPE_LOWER} --default-library=shared --libdir=lib"
+    meson_options+=" -Dcpp_args=-fpermissive -Dlibdrm=true -Dlibrga_demo=false"
     
     # Android 特殊处理
     if [[ "$target_name" == *"-android" ]]; then
@@ -234,7 +344,7 @@ build_target() {
         log_warning "Cross-file not found or not specified, using native build"
     fi
     
-    meson setup "$build_dir" "$LIBRGA_SOURCE_DIR" -Dprefix="$output_dir" $meson_options
+    meson setup "$build_dir" "$LIBRGA_SOURCE_DIR" --prefix "$output_dir" $meson_options
     
     if [ $? -ne 0 ]; then
         log_error "Meson configuration failed"
@@ -266,11 +376,17 @@ build_target() {
     available_tools=$(check_cross_compile_tools "$cross_prefix")
     
     # 压缩库文件
-    compress_libraries "$output_dir" "$target_name" "$available_tools"
+    if [ "$BUILD_TYPE_LOWER" = "debug" ]; then
+        log_info "Debug build type detected, skipping library compression"
+    else
+        compress_libraries "$output_dir" "$target_name" "$available_tools"
+    fi
     
     # 验证构建架构
     validate_build_architecture "$output_dir" "$target_name"
-    
+
+    COMPLETED_OUTPUT_DIRS+=("$output_dir")
+
     return 0
 }
 
@@ -462,8 +578,9 @@ get_cross_compile_prefix() {
         return 0
     fi
     
-    IFS=':' read -r target_name output_dir libdrm_dir cross_prefix expected_arch <<< "$config"
-    echo "$cross_prefix"
+    local cfg_target cfg_output_dir cfg_libdrm_dir cfg_cross_prefix cfg_expected_arch
+    IFS=':' read -r cfg_target cfg_output_dir cfg_libdrm_dir cfg_cross_prefix cfg_expected_arch <<< "$config"
+    echo "$cfg_cross_prefix"
 }
 
 # 压缩库文件
@@ -671,8 +788,9 @@ build_single_target() {
         return 1
     fi
     
-    IFS=':' read -r target_name output_dir <<< "$target_config"
-    if build_target "$target_name" "$output_dir"; then
+    local cfg_target cfg_output_dir
+    IFS=':' read -r cfg_target cfg_output_dir <<< "$target_config"
+    if build_target "$cfg_target"; then
         log_success "$target build completed"
         return 0
     else
@@ -704,6 +822,59 @@ build_multiple_targets() {
     return $((failure_count > 0 ? 1 : 0))
 }
 
+parse_arguments() {
+    local target=""
+
+    BUILD_TYPE="Release"
+    BUILD_TYPE_LOWER="release"
+    BUILD_TYPE_SET="false"
+    PARSED_TARGET=""
+
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            --build_type)
+                if [ -z "${2:-}" ]; then
+                    log_error "--build_type requires a value (Debug or Release)"
+                    exit 1
+                fi
+                set_build_type_from_arg "$2"
+                shift 2
+                continue
+                ;;
+            --build_type=*)
+                set_build_type_from_arg "${1#*=}"
+                shift
+                continue
+                ;;
+            Debug|debug|Release|release)
+                log_error "Build type must be specified using --build_type"
+                exit 1
+                ;;
+            -* )
+                log_error "Unknown option: $1"
+                show_help
+                exit 1
+                ;;
+            *)
+                if [ -z "$target" ]; then
+                    target="$1"
+                else
+                    log_error "Multiple targets specified. Only one target is allowed."
+                    show_help
+                    exit 1
+                fi
+                ;;
+        esac
+        shift
+    done
+
+    PARSED_TARGET="$target"
+}
+
 # 主函数
 main() {
     local target="${1:-}"
@@ -712,6 +883,8 @@ main() {
     clone_librga
     mkdir -p "$RKRGA_OUTPUT_DIR"
     apply_meson_clockskew_patch    
+
+    log_info "当前构建类型: $BUILD_TYPE"
 
     if [ -n "$target" ]; then
         # 构建单个目标
@@ -731,11 +904,23 @@ main() {
     create_version_file
 
     # 显示结果
-    log_info "Output directory: $RKRGA_OUTPUT_DIR"
-    if command -v tree &> /dev/null; then
-        tree "$RKRGA_OUTPUT_DIR"
+    if [ ${#COMPLETED_OUTPUT_DIRS[@]} -gt 0 ]; then
+        log_info "Artifacts installed to:"
+        for dir in "${COMPLETED_OUTPUT_DIRS[@]}"; do
+            log_info "  - $dir"
+            if command -v tree &> /dev/null; then
+                tree "$dir"
+            else
+                ls -la "$dir"
+            fi
+        done
     else
-        ls -la "$RKRGA_OUTPUT_DIR"
+        log_info "Output directory root: $RKRGA_OUTPUT_DIR"
+        if command -v tree &> /dev/null; then
+            tree "$RKRGA_OUTPUT_DIR"
+        else
+            ls -la "$RKRGA_OUTPUT_DIR"
+        fi
     fi
 }
 
@@ -743,7 +928,11 @@ main() {
 show_help() {
     echo "RK RGA Build Script (Meson)"
     echo ""
-    echo "Usage: $0 [TARGET]"
+    echo "Usage: $0 [OPTIONS] [TARGET]"
+    echo ""
+    echo "Options:"
+    printf "  %-25s %s\n" "--build_type {Debug,Release}" "Set build type (default: Release)"
+    printf "  %-25s %s\n" "-h, --help" "Show this help message"
     echo ""
     echo "TARGET (optional):"
     
@@ -770,13 +959,14 @@ show_help() {
     
     echo ""
     echo "Examples:"
-    echo "  $0                    # Build default targets ($_DEFAULT_BUILD_TARGETS)"
-    echo "  $0 aarch64-linux-gnu  # Build only ARM 64-bit GNU libc version"
-    echo "  $0 aarch64-linux-android  # Build Android ARM 64-bit version"
-    echo "  $0 arm-linux-musleabihf  # Build ARM 32-bit musl version"
-    echo "  $0 aarch64-linux-musl    # Build ARM 64-bit musl version"
-    echo "  $0 x86_64-linux-gnu      # Build x86 64-bit Linux version"
-    echo "  $0 --clean            # Clean all build artifacts"
+    echo "  $0                                # Build default targets ($_DEFAULT_BUILD_TARGETS)"
+    echo "  $0 aarch64-linux-gnu              # Build only ARM 64-bit GNU libc version"
+    echo "  $0 --build_type Debug aarch64-linux-gnu  # Debug build with -debug suffix"
+    echo "  $0 aarch64-linux-android          # Build Android ARM 64-bit version"
+    echo "  $0 arm-linux-musleabihf           # Build ARM 32-bit musl version"
+    echo "  $0 aarch64-linux-musl             # Build ARM 64-bit musl version"
+    echo "  $0 x86_64-linux-gnu               # Build x86 64-bit Linux version"
+    echo "  $0 --clean                        # Clean all build artifacts"
     echo ""
     echo "Environment Variables:"
     echo "  ANDROID_NDK_HOME      Path to Android NDK (default: ~/sdk/android_ndk/android-ndk-r25c)"
@@ -839,13 +1029,5 @@ cleanup() {
 
 trap cleanup EXIT
 
-# 执行主函数
-case "${1:-}" in
-    -h|--help)
-        show_help
-        exit 0
-        ;;
-    *)
-        main "$1"
-        ;;
-esac
+parse_arguments "$@"
+main "$PARSED_TARGET"
