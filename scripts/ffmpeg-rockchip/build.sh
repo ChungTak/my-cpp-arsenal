@@ -490,39 +490,118 @@ setup_arch_and_os() {
     echo "$arch:$target_os"
 }
 
-# 获取RockChip特定的配置选项
+# # 获取RockChip特定的配置选项 video only
+# get_rk_only_options() {
+#     echo "--disable-everything \
+#         --disable-programs \
+#         --disable-doc \
+#         --enable-swscale \
+#         --enable-swresample \
+#         --disable-postproc \
+#         --enable-network \
+#         --enable-static \
+#         --disable-stripping \
+#         --enable-shared \
+#         --enable-gpl \
+#         --enable-version3 \
+#         --enable-ffmpeg \
+#         --enable-libdrm \
+#         --enable-rkrga \
+#         --enable-rkmpp \
+#         \
+#         --enable-protocol=file \
+#         \
+#         --enable-muxer=mp4 \
+#         --enable-muxer=avi \
+#         --enable-muxer=null \
+#         --enable-demuxer=mov \
+#         --enable-demuxer=matroska \
+#         --enable-demuxer=avi \
+#         \
+#         --enable-encoder=wrapped_avframe \
+#         --enable-encoder=rawvideo \
+#         --enable-encoder=h264_rkmpp \
+#         --enable-encoder=hevc_rkmpp \
+#         --enable-encoder=mjpeg_rkmpp \
+#         \
+#         --enable-decoder=wrapped_avframe \
+#         --enable-decoder=rawvideo \
+#         --enable-decoder=h264_rkmpp \
+#         --enable-decoder=av1_rkmpp \
+#         --enable-decoder=mjpeg_rkmpp \
+#         --enable-decoder=hevc_rkmpp \
+#         --enable-decoder=vp8_rkmpp \
+#         --enable-decoder=vp9_rkmpp \
+#         --enable-decoder=h263_rkmpp \
+#         --enable-decoder=mpeg1_rkmpp \
+#         --enable-decoder=mpeg2_rkmpp \
+#         --enable-decoder=mpeg4_rkmpp \
+#         \
+#         --enable-parser=h264 \
+#         --enable-parser=hevc \
+#         --enable-parser=mjpeg \
+#         --enable-parser=av1 \
+#         --enable-parser=vp8 \
+#         --enable-parser=vp9 \
+#         --enable-parser=h263 \
+#         --enable-parser=mpegvideo \
+#         --enable-parser=mpeg4video \
+#         \
+#         --enable-avfilter \
+#         --enable-indev=lavfi \
+#         --enable-filter=testsrc \
+#         --enable-filter=testsrc2 \
+#         --enable-filter=format \
+#         --enable-filter=hwupload \
+#         --enable-filter=hwdownload \
+#         --enable-filter=scale_rkrga \
+#         --enable-filter=overlay_rkrga \
+#         --enable-filter=vpp_rkrga"
+# }
+
+# 获取RockChip特定的配置选项 video + audio(g711 aac)+net(rtsp flv)
 get_rk_only_options() {
     echo "--disable-everything \
-        --disable-x86asm \
         --disable-programs \
         --disable-doc \
-        --disable-swscale \
-        --disable-swresample \
+        --enable-swscale \
+        --enable-swresample \
         --disable-postproc \
-        --disable-network \
-        --disable-static \
+        --enable-network \
+        --enable-static \
         --disable-stripping \
         --enable-shared \
+        --enable-gpl \
         --enable-version3 \
         --enable-ffmpeg \
         --enable-libdrm \
         --enable-rkrga \
         --enable-rkmpp \
         \
+        --enable-protocol=rtsp \
+        --enable-protocol=rtmp \
+        --enable-protocol=tcp \
+        --enable-protocol=udp \
         --enable-protocol=file \
         \
-        --enable-muxer=mp4 \
-        --enable-muxer=avi \
-        --enable-muxer=null \
+        --enable-demuxer=rtsp \
+        --enable-demuxer=rtmp \
+        --enable-demuxer=flv \
+        --enable-demuxer=m4v \
         --enable-demuxer=mov \
         --enable-demuxer=matroska \
         --enable-demuxer=avi \
+        --enable-demuxer=wav \
+        --enable-demuxer=pcm_alaw \
+        --enable-demuxer=pcm_mulaw \
         \
-        --enable-encoder=wrapped_avframe \
-        --enable-encoder=rawvideo \
-        --enable-encoder=h264_rkmpp \
-        --enable-encoder=hevc_rkmpp \
-        --enable-encoder=mjpeg_rkmpp \
+        --enable-muxer=rtsp \
+        --enable-muxer=rtmp \
+        --enable-muxer=flv \
+        --enable-muxer=mp4 \
+        --enable-muxer=avi \
+        --enable-muxer=null \
+        --enable-muxer=wav \
         \
         --enable-decoder=wrapped_avframe \
         --enable-decoder=rawvideo \
@@ -537,6 +616,29 @@ get_rk_only_options() {
         --enable-decoder=mpeg2_rkmpp \
         --enable-decoder=mpeg4_rkmpp \
         \
+        --enable-encoder=pcm_alaw \
+        --enable-encoder=pcm_mulaw \
+        --enable-encoder=aac \
+        --enable-decoder=pcm_alaw \
+        --enable-decoder=pcm_mulaw \
+        --enable-decoder=aac \
+        --enable-decoder=pcm_s16le \
+        --enable-decoder=pcm_s16be \
+        --enable-decoder=pcm_u16le \
+        --enable-decoder=pcm_u16be \
+        --enable-decoder=pcm_s24le \
+        --enable-decoder=pcm_s24be \
+        --enable-decoder=pcm_u24le \
+        --enable-decoder=pcm_u24be \
+        --enable-decoder=pcm_s32le \
+        --enable-decoder=pcm_s32be \
+        --enable-decoder=pcm_u32le \
+        --enable-decoder=pcm_u32be \
+        --enable-decoder=pcm_f32le \
+        --enable-decoder=pcm_f32be \
+        --enable-decoder=pcm_f64le \
+        --enable-decoder=pcm_f64be \
+        \
         --enable-parser=h264 \
         --enable-parser=hevc \
         --enable-parser=mjpeg \
@@ -546,6 +648,7 @@ get_rk_only_options() {
         --enable-parser=h263 \
         --enable-parser=mpegvideo \
         --enable-parser=mpeg4video \
+        --enable-parser=aac \
         \
         --enable-avfilter \
         --enable-indev=lavfi \
