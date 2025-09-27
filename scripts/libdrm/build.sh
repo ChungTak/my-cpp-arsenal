@@ -19,73 +19,13 @@ LIBDRM_SOURCE_DIR="${SOURCES_DIR}/libdrm"
 PROJECT_ROOT_DIR="${SCRIPT_DIR}"
 
 # 默认构建类型配置
-BUILD_TYPE="Release"
-BUILD_TYPE_LOWER="release"
-BUILD_TYPE_SET="false"
+source "${SCRIPT_DIR}/../common.sh"
+
+reset_build_type_state
 PARSED_TARGET=""
-
-set_build_type_from_arg() {
-    local value="$1"
-
-    if [ -z "$value" ]; then
-        log_error "Missing value for --build_type"
-        exit 1
-    fi
-
-    local normalized
-    normalized=$(echo "$value" | tr '[:upper:]' '[:lower:]')
-
-    case "$normalized" in
-        debug)
-            if [ "$BUILD_TYPE_SET" = "true" ] && [ "$BUILD_TYPE_LOWER" != "debug" ]; then
-                log_error "Conflicting build type arguments detected"
-                exit 1
-            fi
-            BUILD_TYPE="Debug"
-            BUILD_TYPE_LOWER="debug"
-            BUILD_TYPE_SET="true"
-            ;;
-        release)
-            if [ "$BUILD_TYPE_SET" = "true" ] && [ "$BUILD_TYPE_LOWER" != "release" ]; then
-                log_error "Conflicting build type arguments detected"
-                exit 1
-            fi
-            BUILD_TYPE="Release"
-            BUILD_TYPE_LOWER="release"
-            BUILD_TYPE_SET="true"
-            ;;
-        *)
-            log_error "Invalid build type value: $value (expected Debug or Release)"
-            exit 1
-            ;;
-    esac
-}
 
 # 限制默认编译目标
 _DEFAULT_BUILD_TARGETS="aarch64-linux-gnu,arm-linux-gnueabihf,aarch64-linux-android,arm-linux-android"
-
-# 颜色输出
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
-log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
-
-log_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
-}
-
-log_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
-
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
 
 # 获取交叉编译前缀
 get_cross_compile_prefix() {
@@ -144,96 +84,6 @@ get_cross_compile_prefix() {
             echo ""
             ;;
     esac
-}
-
-# 根据构建类型调整输出目录后缀
-get_output_dir_for_build_type() {
-    local base_dir="$1"
-
-    if [ "$BUILD_TYPE_LOWER" = "debug" ]; then
-        echo "${base_dir}-debug"
-    else
-        echo "$base_dir"
-    fi
-}
-
-# 检查交叉编译工具是否可用
-check_cross_compile_tools() {
-    local cross_prefix="$1"
-    local target_name="$2"
-    
-    log_info "Checking cross-compile tools for $target_name (prefix: ${cross_prefix:-'system'})..."
-    
-    # 检查压缩相关工具
-    local tools_status=""
-    
-    # 特殊处理 Android 目标
-    if [[ "$target_name" == *"-android" ]]; then
-        log_info "Android target detected, using LLVM tools from Android NDK"
-        
-        # 检查 Android NDK 环境
-        if [ -n "$ANDROID_NDK_ROOT" ] && [ -d "$ANDROID_NDK_ROOT" ]; then
-            local ndk_toolchain="${ANDROID_NDK_ROOT}/toolchains/llvm/prebuilt/linux-x86_64"
-            
-            # 检查 Android LLVM strip 工具
-            if [ -f "${ndk_toolchain}/bin/llvm-strip" ]; then
-                tools_status="${tools_status}strip:${ndk_toolchain}/bin/llvm-strip "
-                log_info "✓ Found Android LLVM strip tool: ${ndk_toolchain}/bin/llvm-strip"
-            fi
-            
-            # 检查 Android LLVM objcopy 工具
-            if [ -f "${ndk_toolchain}/bin/llvm-objcopy" ]; then
-                tools_status="${tools_status}objcopy:${ndk_toolchain}/bin/llvm-objcopy "
-                log_info "✓ Found Android LLVM objcopy tool: ${ndk_toolchain}/bin/llvm-objcopy"
-            fi
-        else
-            log_warning "Android NDK not found, falling back to system tools"
-        fi
-    fi
-    
-    # 如果 Android 工具未找到或不是 Android 目标，使用常规工具检测
-    if [ -z "$tools_status" ] || [[ "$tools_status" != *"strip:"* ]]; then
-        # strip 工具
-        if [ -n "$cross_prefix" ]; then
-            if command -v "${cross_prefix}strip" &> /dev/null; then
-                tools_status="${tools_status}strip:${cross_prefix}strip "
-            elif command -v "strip" &> /dev/null; then
-                tools_status="${tools_status}strip:strip "
-            fi
-        else
-            if command -v "strip" &> /dev/null; then
-                tools_status="${tools_status}strip:strip "
-            fi
-        fi
-    fi
-    
-    if [ -z "$tools_status" ] || [[ "$tools_status" != *"objcopy:"* ]]; then
-        # objcopy 工具
-        if [ -n "$cross_prefix" ]; then
-            if command -v "${cross_prefix}objcopy" &> /dev/null; then
-                tools_status="${tools_status}objcopy:${cross_prefix}objcopy "
-            elif command -v "objcopy" &> /dev/null; then
-                tools_status="${tools_status}objcopy:objcopy "
-            fi
-        else
-            if command -v "objcopy" &> /dev/null; then
-                tools_status="${tools_status}objcopy:objcopy "
-            fi
-        fi
-    fi
-    
-    # UPX 和通用压缩工具
-    if command -v "upx" &> /dev/null; then
-        tools_status="${tools_status}upx:upx "
-    fi
-    if command -v "xz" &> /dev/null; then
-        tools_status="${tools_status}xz:xz "
-    fi
-    if command -v "gzip" &> /dev/null; then
-        tools_status="${tools_status}gzip:gzip "
-    fi
-    
-    echo "$tools_status"
 }
 
 # 检查必要的工具
@@ -1173,9 +1023,8 @@ validate_target() {
 parse_arguments() {
     local target=""
     
-    BUILD_TYPE="Release"
-    BUILD_TYPE_LOWER="release"
-    BUILD_TYPE_SET="false"
+    reset_build_type_state
+    PARSED_TARGET=""
     
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -1569,54 +1418,58 @@ cleanup() {
 
 # 帮助信息
 show_help() {
-    echo "libdrm Build Script"
-    echo ""
-    echo "Usage: $0 [OPTIONS] [TARGET]"
-    echo ""
-    echo "TARGET (optional):"
-    echo "  arm-linux-gnueabihf    Build ARM 32-bit glibc version"
-    echo "  aarch64-linux-gnu      Build ARM 64-bit glibc version"
-    echo "  riscv64-linux-gnu      Build RISC-V 64-bit glibc version"
-    echo "  arm-linux-musleabihf   Build ARM 32-bit musl version"
-    echo "  aarch64-linux-musl     Build ARM 64-bit musl version"
-    echo "  riscv64-linux-musl     Build RISC-V 64-bit musl version"
-    echo "  x86_64-linux-gnu       Build x86_64 Linux version"
-    echo "  x86_64-windows-gnu     Build x86_64 Windows version"
-    echo "  x86_64-macos           Build x86_64 macOS version"
-    echo "  aarch64-macos          Build ARM64 macOS version"
-    echo "  aarch64-linux-android  Build Android ARM 64-bit version"
-    echo "  arm-linux-android      Build Android ARM 32-bit version"
-    echo ""
-    echo "Options:"
-    echo "  --build_type {Debug|Release}  Set build configuration (default: Release)"
-    echo "  -h, --help     Show this help message"
-    echo "  -c, --clean    Clean build directories only"
-    echo "  --clean-all    Clean all (sources and outputs)"
-    echo ""
-    echo "Environment Variables:"
-    echo "  TOOLCHAIN_ROOT_DIR    Path to cross-compilation toolchain (optional)"
-    echo "  ANDROID_NDK_HOME      Path to Android NDK (default: ~/sdk/android_ndk/android-ndk-r25c)"
-    echo ""
-    echo "Examples:"
-    echo "  $0                                # Build default targets in Release configuration"
-    echo "  $0 --build_type Debug             # Build default targets in Debug configuration"
-    echo "  $0 --build_type Release aarch64-linux-gnu  # Release build for aarch64-linux-gnu"
-    echo "  $0 --build_type Debug arm-linux-musleabihf # Debug build for arm-linux-musleabihf"
-    echo "  $0 aarch64-linux-android          # Release build for Android ARM 64-bit"
-    echo "  $0 --build_type Debug aarch64-linux-android # Debug build for Android ARM 64-bit"
-    echo "  $0 --clean           # Clean build directories"
-    echo "  $0 --clean-all       # Clean everything"
-    echo ""
-    echo "Features:"
-    echo "  - Fixed version: $LIBDRM_VERSION"
-    echo "  - Uses meson build system"
-    echo "  - Cross-compilation support via cross-build.txt"
-    echo "  - Automatic meson clockskew patch to avoid time synchronization issues"
-    echo "  - Automatic library compression using available tools"
-    echo "  - UPX compression for .so files (if available)"
-    echo "  - Symbol stripping for size reduction"
-    echo "  - Compression statistics and size reporting"
-    echo ""
+    local script_name
+    script_name="$(basename "$0")"
+
+    cat <<EOF
+libdrm Build Script
+
+Usage: ./${script_name} [OPTIONS] [TARGET]
+
+TARGET (optional):
+    arm-linux-gnueabihf    Build ARM 32-bit glibc version
+    aarch64-linux-gnu      Build ARM 64-bit glibc version
+    riscv64-linux-gnu      Build RISC-V 64-bit glibc version
+    arm-linux-musleabihf   Build ARM 32-bit musl version
+    aarch64-linux-musl     Build ARM 64-bit musl version
+    riscv64-linux-musl     Build RISC-V 64-bit musl version
+    x86_64-linux-gnu       Build x86_64 Linux version
+    x86_64-windows-gnu     Build x86_64 Windows version
+    x86_64-macos           Build x86_64 macOS version
+    aarch64-macos          Build ARM64 macOS version
+    aarch64-linux-android  Build Android ARM 64-bit version
+    arm-linux-android      Build Android ARM 32-bit version
+
+Options:
+    --build_type {Debug|Release}  Set build configuration (default: Release)
+    -h, --help                    Show this help message
+    -c, --clean                   Clean build directories only
+    --clean-all                   Clean all (sources and outputs)
+
+Environment Variables:
+    TOOLCHAIN_ROOT_DIR    Path to cross-compilation toolchain (optional)
+    ANDROID_NDK_HOME      Path to Android NDK (default: ~/sdk/android_ndk/android-ndk-r25c)
+
+Examples:
+    ./${script_name}                                # Build default targets in Release configuration
+    ./${script_name} --build_type Debug             # Build default targets in Debug configuration
+    ./${script_name} --build_type Release aarch64-linux-gnu  # Release build for aarch64-linux-gnu
+    ./${script_name} --build_type Debug arm-linux-musleabihf # Debug build for arm-linux-musleabihf
+    ./${script_name} aarch64-linux-android          # Release build for Android ARM 64-bit
+    ./${script_name} --build_type Debug aarch64-linux-android # Debug build for Android ARM 64-bit
+    ./${script_name} --clean                        # Clean build directories
+    ./${script_name} --clean-all                    # Clean everything
+
+Features:
+    - Fixed version: ${LIBDRM_VERSION}
+    - Uses meson build system
+    - Cross-compilation support via cross-build.txt
+    - Automatic meson clockskew patch to avoid time synchronization issues
+    - Automatic library compression using available tools
+    - UPX compression for .so files (if available)
+    - Symbol stripping for size reduction
+    - Compression statistics and size reporting
+EOF
 }
 
 # 清理所有

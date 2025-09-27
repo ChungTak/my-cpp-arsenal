@@ -17,9 +17,9 @@ FFMPEG_OUTPUT_DIR="${OUTPUTS_DIR}/ffmpeg-rockchip"
 FFMPEG_SOURCE_DIR="${SOURCES_DIR}/ffmpeg-rockchip"
 
 # 默认构建类型配置
-BUILD_TYPE="Release"
-BUILD_TYPE_LOWER="release"
-BUILD_TYPE_SET="false"
+source "${SCRIPT_DIR}/../common.sh"
+
+reset_build_type_state
 PARSED_TARGET=""
 
 # 记录成功构建的输出目录
@@ -28,12 +28,13 @@ declare -a COMPLETED_OUTPUT_DIRS=()
 # 限制默认编译目标
 _DEFAULT_BUILD_TARGETS="aarch64-linux-gnu,arm-linux-gnueabihf,aarch64-linux-android,arm-linux-android"
 
-# 颜色输出
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+# 构建依赖配置
+DEPENDENCIES=("rkmpp" "rkrga" "libdrm")
+declare -A DEP_PKGCONFIG_FILES=(
+    [rkmpp]="lib/pkgconfig/rockchip_mpp.pc"
+    [rkrga]="lib/pkgconfig/librga.pc"
+    [libdrm]="lib/pkgconfig/libdrm.pc"
+)
 
 # 记录初始依赖环境变量，便于在不同目标之间恢复
 ORIGINAL_PKG_CONFIG_PATH="${PKG_CONFIG_PATH:-}"
@@ -43,347 +44,7 @@ ORIGINAL_RKMPP_PATH="${RKMPP_PATH:-}"
 ORIGINAL_RKRGA_PATH="${RKRGA_PATH:-}"
 ORIGINAL_LIBDRM_PATH="${LIBDRM_PATH:-}"
 
-log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
-
-log_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
-}
-
-log_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
-
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-set_build_type_from_arg() {
-    local value="$1"
-
-    if [ -z "$value" ]; then
-        log_error "Missing value for --build_type"
-        exit 1
-    fi
-
-    local normalized
-    normalized=$(echo "$value" | tr '[:upper:]' '[:lower:]')
-
-    case "$normalized" in
-        debug)
-            if [ "$BUILD_TYPE_SET" = "true" ] && [ "$BUILD_TYPE_LOWER" != "debug" ]; then
-                log_error "Conflicting build type arguments detected"
-                exit 1
-            fi
-            BUILD_TYPE="Debug"
-            BUILD_TYPE_LOWER="debug"
-            BUILD_TYPE_SET="true"
-            ;;
-        release)
-            if [ "$BUILD_TYPE_SET" = "true" ] && [ "$BUILD_TYPE_LOWER" != "release" ]; then
-                log_error "Conflicting build type arguments detected"
-                exit 1
-            fi
-            BUILD_TYPE="Release"
-            BUILD_TYPE_LOWER="release"
-            BUILD_TYPE_SET="true"
-            ;;
-        *)
-            log_error "Invalid build type value: $value (expected Debug or Release)"
-            exit 1
-            ;;
-    esac
-}
-
-get_output_dir_for_build_type() {
-    local base_dir="$1"
-
-    if [ -z "$base_dir" ]; then
-        echo ""
-        return 0
-    fi
-
-    if [ "$BUILD_TYPE_LOWER" = "debug" ]; then
-        echo "${base_dir}-debug"
-    else
-        echo "$base_dir"
-    fi
-}
-
-# 检查工具是否存在
-check_tool_exists() {
-    local tool_name="$1"
-    local cross_prefix="$2"
-    local tool_path=""
-    
-    if [ -n "$cross_prefix" ]; then
-        tool_path="${cross_prefix}${tool_name}"
-        if command -v "$tool_path" &> /dev/null; then
-            echo "$tool_path"
-            return 0
-        fi
-    fi
-    
-    if command -v "$tool_name" &> /dev/null; then
-        echo "$tool_name"
-        return 0
-    fi
-    
-    return 1
-}
-
-# 检查工具列表
-check_tools_list() {
-    local cross_prefix="$1"
-    local tools_string="$2"
-
-    local tools_status=""
-
-    read -ra tools <<< "$tools_string"
-
-    for tool in "${tools[@]}"; do
-        local tool_path
-        if tool_path=$(check_tool_exists "$tool" "$cross_prefix"); then
-            tools_status="${tools_status}${tool}:${tool_path} "
-        fi
-    done
-
-    echo "$tools_status"
-}
-
-# 归一化交叉编译前缀，确保以连字符结尾
-normalize_cross_prefix() {
-    local prefix="$1"
-
-    if [ -z "$prefix" ]; then
-        echo ""
-        return 0
-    fi
-
-    prefix="$(echo "$prefix" | tr -d '[:space:]')"
-    if [ -z "$prefix" ]; then
-        echo ""
-        return 0
-    fi
-
-    if [[ "$prefix" != *- ]]; then
-        prefix="${prefix}-"
-    fi
-
-    echo "$prefix"
-}
-
-# 校验工具路径是否存在并与预期前缀匹配
-validate_cross_tool_path() {
-    local candidate="$1"
-    local expected_prefix="$2"
-    local tool_name="$3"
-
-    if [ -z "$candidate" ]; then
-        echo ""
-        return 1
-    fi
-
-    if [[ "$candidate" != /* ]]; then
-        candidate="$(command -v "$candidate" 2>/dev/null || true)"
-    fi
-
-    if [ -z "$candidate" ] || [ ! -x "$candidate" ]; then
-        echo ""
-        return 1
-    fi
-
-    if [ -n "$expected_prefix" ]; then
-        local basename
-        basename="$(basename "$candidate")"
-        local expected_command="${expected_prefix}${tool_name}"
-        if [ "$basename" != "$expected_command" ]; then
-            echo ""
-            return 1
-        fi
-    fi
-
-    echo "$candidate"
-    return 0
-}
-
-find_cross_tool_in_path() {
-    local cross_prefix="$1"
-    local tool_name="$2"
-
-    if [ -z "$cross_prefix" ]; then
-        echo ""
-        return 1
-    fi
-
-    local resolved
-    resolved="$(command -v "${cross_prefix}${tool_name}" 2>/dev/null || true)"
-    resolved="$(validate_cross_tool_path "$resolved" "$cross_prefix" "$tool_name")"
-
-    if [ -n "$resolved" ]; then
-        echo "$resolved"
-        return 0
-    fi
-
-    echo ""
-    return 1
-}
-
-find_cross_tool_in_dirs() {
-    local cross_prefix="$1"
-    local tool_name="$2"
-    shift 2
-
-    if [ -z "$cross_prefix" ]; then
-        echo ""
-        return 1
-    fi
-
-    local candidate
-    for dir in "$@"; do
-        [ -z "$dir" ] && continue
-        candidate="${dir%/}/${cross_prefix}${tool_name}"
-        if [ -x "$candidate" ]; then
-            echo "$candidate"
-            return 0
-        fi
-    done
-
-    echo ""
-    return 1
-}
-
-find_tool_in_dirs() {
-    local tool_name="$1"
-    shift
-
-    local candidate
-    for dir in "$@"; do
-        [ -z "$dir" ] && continue
-        candidate="${dir%/}/${tool_name}"
-        if [ -x "$candidate" ]; then
-            echo "$candidate"
-            return 0
-        fi
-    done
-
-    echo ""
-    return 1
-}
-
-# 检查交叉编译工具是否可用
-check_cross_compile_tools() {
-    local cross_prefix="$1"
-    local target_name="$2"
-    local build_dir="$3"
-    local toolchain_file="$4"
-
-    log_info "检查 $target_name 的交叉编译工具 (前缀: ${cross_prefix:-'系统默认'})..."
-
-    local tools_status=""
-    local strip_cmd=""
-    local objcopy_cmd=""
-    local cmake_cache=""
-    local compiler_dir=""
-    local cache_strip=""
-    local cache_objcopy=""
-
-    if [ -n "$build_dir" ]; then
-        cmake_cache="${build_dir%/}/CMakeCache.txt"
-        if [ -f "$cmake_cache" ]; then
-            cache_strip=$(sed -n 's/^CMAKE_STRIP:FILEPATH=//p' "$cmake_cache" | head -n1)
-            strip_cmd=$(validate_cross_tool_path "$cache_strip" "$cross_prefix" "strip")
-
-            cache_objcopy=$(sed -n 's/^CMAKE_OBJCOPY:FILEPATH=//p' "$cmake_cache" | head -n1)
-            objcopy_cmd=$(validate_cross_tool_path "$cache_objcopy" "$cross_prefix" "objcopy")
-
-            local cache_compiler
-            cache_compiler=$(sed -n 's/^CMAKE_C_COMPILER:FILEPATH=//p' "$cmake_cache" | head -n1)
-            if [ -n "$cache_compiler" ]; then
-                compiler_dir="$(dirname "$cache_compiler")"
-            fi
-        fi
-    fi
-
-    local candidate_dirs=()
-    [ -n "$compiler_dir" ] && candidate_dirs+=("$compiler_dir")
-    if [ -n "$TOOLCHAIN_ROOT_DIR" ]; then
-        candidate_dirs+=("$TOOLCHAIN_ROOT_DIR/bin" "$TOOLCHAIN_ROOT_DIR/usr/bin")
-    fi
-    if [ -n "$TOOLCHAIN" ]; then
-        candidate_dirs+=("$TOOLCHAIN/bin" "$TOOLCHAIN")
-    fi
-    if [ -n "$TOOLCHAIN_BIN_DIR" ]; then
-        candidate_dirs+=("$TOOLCHAIN_BIN_DIR")
-    fi
-    if [ -n "$toolchain_file" ]; then
-        local tf_dir
-        tf_dir="$(dirname "$toolchain_file")"
-        candidate_dirs+=("$tf_dir" "$tf_dir/bin" "$(dirname "$tf_dir")/bin")
-    fi
-
-    if [ -z "$cross_prefix" ] && [ -n "$CROSS_COMPILE" ]; then
-        cross_prefix="$(normalize_cross_prefix "$CROSS_COMPILE")"
-    fi
-
-    cross_prefix="$(normalize_cross_prefix "$cross_prefix")"
-
-    if [ -z "$strip_cmd" ]; then
-        strip_cmd=$(find_cross_tool_in_path "$cross_prefix" "strip")
-    fi
-    if [ -z "$objcopy_cmd" ]; then
-        objcopy_cmd=$(find_cross_tool_in_path "$cross_prefix" "objcopy")
-    fi
-
-    if [ -z "$strip_cmd" ]; then
-        strip_cmd=$(find_cross_tool_in_dirs "$cross_prefix" "strip" "${candidate_dirs[@]}")
-    fi
-    if [ -z "$objcopy_cmd" ]; then
-        objcopy_cmd=$(find_cross_tool_in_dirs "$cross_prefix" "objcopy" "${candidate_dirs[@]}")
-    fi
-
-    if [ -z "$strip_cmd" ]; then
-        local llvm_strip
-        llvm_strip=$(command -v llvm-strip 2>/dev/null || true)
-        if [ -z "$llvm_strip" ]; then
-            llvm_strip=$(find_tool_in_dirs "llvm-strip" "${candidate_dirs[@]}")
-        fi
-        strip_cmd=$(validate_cross_tool_path "$llvm_strip" "" "llvm-strip")
-    fi
-
-    if [ -z "$objcopy_cmd" ]; then
-        local llvm_objcopy
-        llvm_objcopy=$(command -v llvm-objcopy 2>/dev/null || true)
-        if [ -z "$llvm_objcopy" ]; then
-            llvm_objcopy=$(find_tool_in_dirs "llvm-objcopy" "${candidate_dirs[@]}")
-        fi
-        objcopy_cmd=$(validate_cross_tool_path "$llvm_objcopy" "" "llvm-objcopy")
-    fi
-
-    if [ -z "$strip_cmd" ] && [ -n "$cache_strip" ]; then
-        strip_cmd=$(validate_cross_tool_path "$cache_strip" "" "strip")
-    fi
-    if [ -z "$objcopy_cmd" ] && [ -n "$cache_objcopy" ]; then
-        objcopy_cmd=$(validate_cross_tool_path "$cache_objcopy" "" "objcopy")
-    fi
-
-    if [ -n "$strip_cmd" ]; then
-        tools_status+="strip:$strip_cmd "
-    fi
-
-    if [ -n "$objcopy_cmd" ]; then
-        tools_status+="objcopy:$objcopy_cmd "
-    fi
-
-    for tool in upx xz gzip; do
-        if command -v "$tool" &> /dev/null; then
-            tools_status="${tools_status}${tool}:${tool} "
-        fi
-    done
-
-    echo "$tools_status"
-}
+# 检查必要的工具
 
 # 检查必要的工具
 check_tools() {
@@ -481,27 +142,19 @@ check_dependency_built() {
 
     dependency_dir=$(get_output_dir_for_build_type "$dependency_dir")
     
-    # 检查依赖目录是否存在且包含必要的文件
-    if [ -d "$dependency_dir" ]; then
-        case "$dependency" in
-            "rkmpp")
-                if [ -f "$dependency_dir/lib/pkgconfig/rockchip_mpp.pc" ]; then
-                    return 0
-                fi
-                ;;
-            "rkrga")
-                if [ -f "$dependency_dir/lib/pkgconfig/librga.pc" ]; then
-                    return 0
-                fi
-                ;;
-            "libdrm")
-                if [ -f "$dependency_dir/lib/pkgconfig/libdrm.pc" ]; then
-                    return 0
-                fi
-                ;;
-        esac
+    if [ ! -d "$dependency_dir" ]; then
+        return 1
     fi
-    
+
+    local manifest="${DEP_PKGCONFIG_FILES[$dependency]:-}"
+    if [ -z "$manifest" ]; then
+        return 0
+    fi
+
+    if [ -f "$dependency_dir/$manifest" ]; then
+        return 0
+    fi
+
     return 1
 }
 
@@ -583,12 +236,9 @@ check_and_build_dependencies() {
     reset_dependency_env
 
     log_info "Checking dependencies for target: $target"
-    
-    local dependencies=("rkmpp" "rkrga" "libdrm")
     local all_dependencies_built=true
-    
-    # 首先检查所有依赖是否都已构建
-    for dependency in "${dependencies[@]}"; do
+
+    for dependency in "${DEPENDENCIES[@]}"; do
         if ! check_dependency_built "$target" "$dependency"; then
             all_dependencies_built=false
             break
@@ -602,7 +252,7 @@ check_and_build_dependencies() {
     fi
     
     # 构建缺失的依赖
-    for dependency in "${dependencies[@]}"; do
+    for dependency in "${DEPENDENCIES[@]}"; do
         if ! check_dependency_built "$target" "$dependency"; then
             log_warning "$dependency dependency not found for $target, building..."
             if ! build_dependency "$target" "$dependency"; then
@@ -620,127 +270,85 @@ check_and_build_dependencies() {
 # 设置依赖环境变量
 setup_dependency_env() {
     local target="$1"
-    local rkmpp_dir=""
-    local rkrga_dir=""
-    local libdrm_dir=""
-    
-    case "$target" in
-        "arm-linux-gnueabihf")
-            rkmpp_dir="${OUTPUTS_DIR}/rkmpp/arm-linux-gnueabihf"
-            rkrga_dir="${OUTPUTS_DIR}/rkrga/arm-linux-gnueabihf"
-            libdrm_dir="${OUTPUTS_DIR}/libdrm/arm-linux-gnueabihf"
-            ;;
-        "aarch64-linux-gnu")
-            rkmpp_dir="${OUTPUTS_DIR}/rkmpp/aarch64-linux-gnu"
-            rkrga_dir="${OUTPUTS_DIR}/rkrga/aarch64-linux-gnu"
-            libdrm_dir="${OUTPUTS_DIR}/libdrm/aarch64-linux-gnu"
-            ;;
-        "arm-linux-musleabihf")
-            rkmpp_dir="${OUTPUTS_DIR}/rkmpp/arm-linux-musleabihf"
-            rkrga_dir="${OUTPUTS_DIR}/rkrga/arm-linux-musleabihf"
-            libdrm_dir="${OUTPUTS_DIR}/libdrm/arm-linux-musleabihf"
-            ;;
-        "aarch64-linux-musl")
-            rkmpp_dir="${OUTPUTS_DIR}/rkmpp/aarch64-linux-musl"
-            rkrga_dir="${OUTPUTS_DIR}/rkrga/aarch64-linux-musl"
-            libdrm_dir="${OUTPUTS_DIR}/libdrm/aarch64-linux-musl"
-            ;;
-        "riscv64-linux-gnu")
-            rkmpp_dir="${OUTPUTS_DIR}/rkmpp/riscv64-linux-gnu"
-            rkrga_dir="${OUTPUTS_DIR}/rkrga/riscv64-linux-gnu"
-            libdrm_dir="${OUTPUTS_DIR}/libdrm/riscv64-linux-gnu"
-            ;;
-        "riscv64-linux-musl")
-            rkmpp_dir="${OUTPUTS_DIR}/rkmpp/riscv64-linux-musl"
-            rkrga_dir="${OUTPUTS_DIR}/rkrga/riscv64-linux-musl"
-            libdrm_dir="${OUTPUTS_DIR}/libdrm/riscv64-linux-musl"
-            ;;
-        "aarch64-linux-android")
-            rkmpp_dir="${OUTPUTS_DIR}/rkmpp/aarch64-linux-android"
-            rkrga_dir="${OUTPUTS_DIR}/rkrga/aarch64-linux-android"
-            libdrm_dir="${OUTPUTS_DIR}/libdrm/aarch64-linux-android"
-            ;;
-        "arm-linux-android")
-            rkmpp_dir="${OUTPUTS_DIR}/rkmpp/arm-linux-android"
-            rkrga_dir="${OUTPUTS_DIR}/rkrga/arm-linux-android"
-            libdrm_dir="${OUTPUTS_DIR}/libdrm/arm-linux-android"
-            ;;
-        "x86_64-linux-gnu")
-            rkmpp_dir="${OUTPUTS_DIR}/rkmpp/x86_64-linux-gnu"
-            rkrga_dir="${OUTPUTS_DIR}/rkrga/x86_64-linux-gnu"
-            libdrm_dir="${OUTPUTS_DIR}/libdrm/x86_64-linux-gnu"
-            ;;
-        "x86_64-windows-gnu")
-            rkmpp_dir="${OUTPUTS_DIR}/rkmpp/x86_64-windows-gnu"
-            rkrga_dir="${OUTPUTS_DIR}/rkrga/x86_64-windows-gnu"
-            libdrm_dir="${OUTPUTS_DIR}/libdrm/x86_64-windows-gnu"
-            ;;
-        "x86_64-macos")
-            rkmpp_dir="${OUTPUTS_DIR}/rkmpp/x86_64-macos"
-            rkrga_dir="${OUTPUTS_DIR}/rkrga/x86_64-macos"
-            libdrm_dir="${OUTPUTS_DIR}/libdrm/x86_64-macos"
-            ;;
-        "aarch64-macos")
-            rkmpp_dir="${OUTPUTS_DIR}/rkmpp/aarch64-macos"
-            rkrga_dir="${OUTPUTS_DIR}/rkrga/aarch64-macos"
-            libdrm_dir="${OUTPUTS_DIR}/libdrm/aarch64-macos"
-            ;;
-        *)
-            rkmpp_dir="${OUTPUTS_DIR}/rkmpp"
-            rkrga_dir="${OUTPUTS_DIR}/rkrga"
-            libdrm_dir="${OUTPUTS_DIR}/libdrm"
-            ;;
-    esac
+    local pkg_paths=()
+    local include_flags=("-DHAVE_SYSCTL=0")
+    local lib_flags=()
 
-    rkmpp_dir=$(get_output_dir_for_build_type "$rkmpp_dir")
-    rkrga_dir=$(get_output_dir_for_build_type "$rkrga_dir")
-    libdrm_dir=$(get_output_dir_for_build_type "$libdrm_dir")
-    
-    # 检查依赖是否都存在
-    if [ ! -d "$rkmpp_dir" ]; then
-        log_error "rkmpp dependency not found: $rkmpp_dir"
-        return 1
-    fi
-    
-    if [ ! -d "$rkrga_dir" ]; then
-        log_error "rkrga dependency not found: $rkrga_dir"
-        return 1
-    fi
-    
-    if [ ! -d "$libdrm_dir" ]; then
-        log_error "libdrm dependency not found: $libdrm_dir"
-        return 1
-    fi
-    
-    # 设置环境变量
-    export RKMPP_PATH="$rkmpp_dir"
-    export RKRGA_PATH="$rkrga_dir"
-    export LIBDRM_PATH="$libdrm_dir"
-    local pkg_paths="${RKMPP_PATH}/lib/pkgconfig:${RKRGA_PATH}/lib/pkgconfig:${LIBDRM_PATH}/lib/pkgconfig"
-    if [ -n "$PKG_CONFIG_PATH" ]; then
-        export PKG_CONFIG_PATH="${pkg_paths}:${PKG_CONFIG_PATH}"
-    else
-        export PKG_CONFIG_PATH="$pkg_paths"
+    for dependency in "${DEPENDENCIES[@]}"; do
+        local base_dir="${OUTPUTS_DIR}/${dependency}"
+        if [ -n "$target" ]; then
+            base_dir="${base_dir}/${target}"
+        fi
+
+        local resolved_dir
+        resolved_dir=$(get_output_dir_for_build_type "$base_dir")
+
+        if [ ! -d "$resolved_dir" ]; then
+            log_error "$dependency dependency not found: $resolved_dir"
+            return 1
+        fi
+
+        case "$dependency" in
+            rkmpp) export RKMPP_PATH="$resolved_dir" ;;
+            rkrga) export RKRGA_PATH="$resolved_dir" ;;
+            libdrm) export LIBDRM_PATH="$resolved_dir" ;;
+        esac
+
+        if [ -d "$resolved_dir/lib/pkgconfig" ]; then
+            pkg_paths+=("$resolved_dir/lib/pkgconfig")
+        fi
+
+        if [ -d "$resolved_dir/include" ]; then
+            include_flags+=("-I${resolved_dir}/include")
+        fi
+        if [ -d "$resolved_dir/lib" ]; then
+            lib_flags+=("-L${resolved_dir}/lib")
+        fi
+    done
+
+    if [ ${#pkg_paths[@]} -gt 0 ]; then
+        local pkg_path_join=""
+        for path in "${pkg_paths[@]}"; do
+            if [ -z "$pkg_path_join" ]; then
+                pkg_path_join="$path"
+            else
+                pkg_path_join="${pkg_path_join}:$path"
+            fi
+        done
+
+        if [ -n "$PKG_CONFIG_PATH" ]; then
+            export PKG_CONFIG_PATH="${pkg_path_join}:${PKG_CONFIG_PATH}"
+        else
+            export PKG_CONFIG_PATH="$pkg_path_join"
+        fi
     fi
 
-    local extra_cflags="-I${RKMPP_PATH}/include -I${RKRGA_PATH}/include -I${LIBDRM_PATH}/include -DHAVE_SYSCTL=0"
+    local extra_cflags="${include_flags[*]}"
+    extra_cflags="${extra_cflags# }"
     if [ -n "$CFLAGS" ]; then
         export CFLAGS="${extra_cflags} ${CFLAGS}"
     else
         export CFLAGS="$extra_cflags"
     fi
 
-    local extra_ldflags="-L${RKMPP_PATH}/lib -L${RKRGA_PATH}/lib -L${LIBDRM_PATH}/lib"
-    if [ -n "$LDFLAGS" ]; then
-        export LDFLAGS="${extra_ldflags} ${LDFLAGS}"
-    else
-        export LDFLAGS="$extra_ldflags"
+    local extra_ldflags="${lib_flags[*]}"
+    extra_ldflags="${extra_ldflags# }"
+    if [ -n "$extra_ldflags" ]; then
+        if [ -n "$LDFLAGS" ]; then
+            export LDFLAGS="${extra_ldflags} ${LDFLAGS}"
+        else
+            export LDFLAGS="$extra_ldflags"
+        fi
     fi
-    
+
     log_success "Dependency environment variables set"
-    log_info "  RKMPP_PATH: $RKMPP_PATH"
-    log_info "  RKRGA_PATH: $RKRGA_PATH"
-    log_info "  LIBDRM_PATH: $LIBDRM_PATH"
+    for dependency in "${DEPENDENCIES[@]}"; do
+        case "$dependency" in
+            rkmpp) log_info "  RKMPP_PATH: $RKMPP_PATH" ;;
+            rkrga) log_info "  RKRGA_PATH: $RKRGA_PATH" ;;
+            libdrm) log_info "  LIBDRM_PATH: $LIBDRM_PATH" ;;
+        esac
+    done
 }
 
 # 获取交叉编译工具
@@ -1589,42 +1197,43 @@ clean_all() {
 
 # 帮助信息
 show_help() {
-    echo "FFmpeg Rockchip Build Script"
-    echo ""
-    echo "Usage: $0 [OPTIONS] [TARGET]"
-    echo ""
-    echo "TARGET (optional):"
-    echo "  arm-linux-gnueabihf    Build ARM 32-bit glibc version"
-    echo "  aarch64-linux-gnu      Build ARM 64-bit glibc version"
-    echo "  riscv64-linux-gnu      Build RISC-V 64-bit glibc version"
-    echo "  arm-linux-musleabihf   Build ARM 32-bit musl version"
-    echo "  aarch64-linux-musl     Build ARM 64-bit musl version"
-    echo "  riscv64-linux-musl     Build RISC-V 64-bit musl version"
-    echo "  aarch64-linux-android  Build Android ARM 64-bit version"
-    echo "  arm-linux-android      Build Android ARM 32-bit version"
-    echo "  x86_64-linux-gnu       Build x86_64 Linux version"
-    echo "  x86_64-windows-gnu     Build x86_64 Windows version"
-    echo "  x86_64-macos           Build x86_64 macOS version"
-    echo "  aarch64-macos          Build ARM 64-bit macOS version"
-    echo ""
-    echo "Options:"
-    echo "  -h, --help           Show this help message"
-    echo "  -c, --clean          Clean build directories only"
-    echo "  --clean-all          Clean all (sources and outputs)"
-    echo "  --build_type=TYPE    Build configuration: Release (default) or Debug"
-    echo ""
-    echo "Environment Variables:"
-    echo "  TOOLCHAIN_ROOT_DIR    Path to cross-compilation toolchain (optional)"
-    echo "  ANDROID_NDK_HOME      Path to Android NDK (default: ~/sdk/android_ndk/android-ndk-r25c)"
-    echo ""
-    echo "Examples:"
-    echo "  $0                                   # Build default targets (aarch64-linux-gnu, arm-linux-gnueabihf, aarch64-linux-android, arm-linux-android)"
-    echo "  $0 --build_type=Debug                 # Build default targets with Debug configuration"
-    echo "  $0 aarch64-linux-gnu                  # Build only ARM 64-bit glibc version"
-    echo "  $0 aarch64-linux-gnu --build_type=Debug # Build ARM 64-bit glibc version with Debug configuration"
-    echo "  $0 --clean                            # Clean build directories"
-    echo "  $0 --clean-all                        # Clean everything"
-    echo ""
+        cat <<'EOF'
+FFmpeg Rockchip Build Script
+
+Usage: ./build.sh [OPTIONS] [TARGET]
+
+TARGET (optional):
+    arm-linux-gnueabihf    Build ARM 32-bit glibc version
+    aarch64-linux-gnu      Build ARM 64-bit glibc version
+    riscv64-linux-gnu      Build RISC-V 64-bit glibc version
+    arm-linux-musleabihf   Build ARM 32-bit musl version
+    aarch64-linux-musl     Build ARM 64-bit musl version
+    riscv64-linux-musl     Build RISC-V 64-bit musl version
+    aarch64-linux-android  Build Android ARM 64-bit version
+    arm-linux-android      Build Android ARM 32-bit version
+    x86_64-linux-gnu       Build x86_64 Linux version
+    x86_64-windows-gnu     Build x86_64 Windows version
+    x86_64-macos           Build x86_64 macOS version
+    aarch64-macos          Build ARM 64-bit macOS version
+
+Options:
+    -h, --help              Show this help message
+    -c, --clean             Clean build directories only
+    --clean-all             Clean all (sources and outputs)
+    --build_type {Debug|Release}  Set build configuration (default: Release)
+
+Environment Variables:
+    TOOLCHAIN_ROOT_DIR    Path to cross-compilation toolchain (optional)
+    ANDROID_NDK_HOME      Path to Android NDK (default: ~/sdk/android_ndk/android-ndk-r25c)
+
+Examples:
+    ./build.sh                                # Build default targets (aarch64-linux-gnu, arm-linux-gnueabihf, aarch64-linux-android, arm-linux-android)
+    ./build.sh --build_type Debug             # Build default targets with Debug configuration
+    ./build.sh aarch64-linux-gnu              # Build only ARM 64-bit glibc version
+    ./build.sh --build_type Debug aarch64-linux-gnu  # Debug build for ARM 64-bit glibc version
+    ./build.sh --clean                        # Clean build directories
+    ./build.sh --clean-all                    # Clean everything
+EOF
 }
 
 # 信号处理

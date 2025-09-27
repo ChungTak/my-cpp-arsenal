@@ -12,372 +12,32 @@ TOOLCHAIN_DIR="${WORKSPACE_DIR}/toolchain"
 SOURCES_DIR="${WORKSPACE_DIR}/sources"
 OUTPUTS_DIR="${WORKSPACE_DIR}/outputs"
 RKMPP_OUTPUT_DIR="${OUTPUTS_DIR}/rkmpp"
-
-# mpp 源码目录
 MPP_SOURCE_DIR="${SOURCES_DIR}/rkmpp"
 
-# 默认构建类型设置
-BUILD_TYPE="Release"
-BUILD_TYPE_LOWER="release"
-BUILD_TYPE_SET="false"
+# 默认构建类型配置
+source "${SCRIPT_DIR}/../common.sh"
+
+reset_build_type_state
 PARSED_TARGET=""
 
 # 限制默认编译目标
 _DEFAULT_BUILD_TARGETS="aarch64-linux-gnu,arm-linux-gnueabihf,aarch64-linux-android,arm-linux-android"
-
-# 颜色输出
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
-# 日志函数
-log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
-
-log_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
-}
-
-log_warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
-
-log_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
 
 # 错误处理函数
 handle_error() {
     local message="$1"
     local exit_code="${2:-1}"
     log_error "$message"
-    exit $exit_code
+    exit "$exit_code"
 }
 
 # 检查命令执行结果
 check_command_result() {
     local result=$1
     local message="$2"
-    if [ $result -ne 0 ]; then
-        handle_error "$message" $result
+    if [ "$result" -ne 0 ]; then
+        handle_error "$message" "$result"
     fi
-}
-
-# 检查工具是否存在
-check_tool_exists() {
-    local tool_name="$1"
-    local cross_prefix="$2"
-    local tool_path=""
-    
-    if [ -n "$cross_prefix" ]; then
-        tool_path="${cross_prefix}${tool_name}"
-        if command -v "$tool_path" &> /dev/null; then
-            echo "$tool_path"
-            return 0
-        fi
-    fi
-    
-    if command -v "$tool_name" &> /dev/null; then
-        echo "$tool_name"
-        return 0
-    fi
-    
-    return 1
-}
-
-# 检查工具列表
-check_tools_list() {
-    local cross_prefix="$1"
-    local tools_string="$2"
-    
-    local tools_status=""
-    
-    # 将空格分隔的工具字符串转换为数组
-    read -ra tools <<< "$tools_string"
-    
-    for tool in "${tools[@]}"; do
-        local tool_path
-        if tool_path=$(check_tool_exists "$tool" "$cross_prefix"); then
-            tools_status="${tools_status}${tool}:${tool_path} "
-        fi
-    done
-    
-    echo "$tools_status"
-}
-
-# 归一化交叉编译前缀，确保以连字符结尾
-normalize_cross_prefix() {
-    local prefix="$1"
-
-    if [ -z "$prefix" ]; then
-        echo ""
-        return 0
-    fi
-
-    # 去除所有空白字符
-    prefix="$(echo "$prefix" | tr -d '[:space:]')"
-    if [ -z "$prefix" ]; then
-        echo ""
-        return 0
-    fi
-
-    if [[ "$prefix" != *- ]]; then
-        prefix="${prefix}-"
-    fi
-
-    echo "$prefix"
-}
-
-# 设置构建类型参数
-set_build_type_from_arg() {
-    local input="$1"
-
-    if [ -z "$input" ]; then
-        log_error "--build_type requires a value (Debug or Release)"
-        exit 1
-    fi
-
-    local normalized
-    normalized=$(echo "$input" | tr '[:upper:]' '[:lower:]')
-
-    case "$normalized" in
-        debug)
-            BUILD_TYPE="Debug"
-            BUILD_TYPE_LOWER="debug"
-            ;;
-        release)
-            BUILD_TYPE="Release"
-            BUILD_TYPE_LOWER="release"
-            ;;
-        *)
-            log_error "Invalid build type: $input (valid: Debug, Release)"
-            exit 1
-            ;;
-    esac
-
-    BUILD_TYPE_SET="true"
-    log_info "已选择构建类型: $BUILD_TYPE" >&2
-}
-
-# 校验工具路径是否存在并与预期前缀匹配
-validate_cross_tool_path() {
-    local candidate="$1"
-    local expected_prefix="$2"
-    local tool_name="$3"
-
-    if [ -z "$candidate" ]; then
-        echo ""
-        return 1
-    fi
-
-    # 如果是相对路径，尝试解析
-    if [[ "$candidate" != /* ]]; then
-        candidate="$(command -v "$candidate" 2>/dev/null || true)"
-    fi
-
-    if [ -z "$candidate" ] || [ ! -x "$candidate" ]; then
-        echo ""
-        return 1
-    fi
-
-    if [ -n "$expected_prefix" ]; then
-        local basename
-        basename="$(basename "$candidate")"
-        local expected_command="${expected_prefix}${tool_name}"
-        if [ "$basename" != "$expected_command" ]; then
-            echo ""
-            return 1
-        fi
-    fi
-
-    echo "$candidate"
-    return 0
-}
-
-# 在 PATH 中查找交叉编译工具
-find_cross_tool_in_path() {
-    local cross_prefix="$1"
-    local tool_name="$2"
-
-    if [ -z "$cross_prefix" ]; then
-        echo ""
-        return 1
-    fi
-
-    local resolved
-    resolved="$(command -v "${cross_prefix}${tool_name}" 2>/dev/null || true)"
-    resolved="$(validate_cross_tool_path "$resolved" "$cross_prefix" "$tool_name")"
-
-    if [ -n "$resolved" ]; then
-        echo "$resolved"
-        return 0
-    fi
-
-    echo ""
-    return 1
-}
-
-# 在候选目录中查找交叉编译工具
-find_cross_tool_in_dirs() {
-    local cross_prefix="$1"
-    local tool_name="$2"
-    shift 2
-
-    if [ -z "$cross_prefix" ]; then
-        echo ""
-        return 1
-    fi
-
-    local candidate
-    for dir in "$@"; do
-        [ -z "$dir" ] && continue
-        candidate="${dir%/}/${cross_prefix}${tool_name}"
-        if [ -x "$candidate" ]; then
-            echo "$candidate"
-            return 0
-        fi
-    done
-
-    echo ""
-    return 1
-}
-
-find_tool_in_dirs() {
-    local tool_name="$1"
-    shift
-
-    local candidate
-    for dir in "$@"; do
-        [ -z "$dir" ] && continue
-        candidate="${dir%/}/${tool_name}"
-        if [ -x "$candidate" ]; then
-            echo "$candidate"
-            return 0
-        fi
-    done
-
-    echo ""
-    return 1
-}
-
-# 检查交叉编译工具是否可用
-check_cross_compile_tools() {
-    local cross_prefix="$1"
-    local target_name="$2"
-    local build_dir="$3"
-    local toolchain_file="$4"
-    
-    log_info "检查 $target_name 的交叉编译工具 (前缀: ${cross_prefix:-'系统默认'})..."
-    
-    local tools_status=""
-    local strip_cmd=""
-    local objcopy_cmd=""
-    local cmake_cache=""
-    local compiler_dir=""
-
-    # 从 CMakeCache.txt 中提取工具路径
-    if [ -n "$build_dir" ]; then
-        cmake_cache="${build_dir%/}/CMakeCache.txt"
-        if [ -f "$cmake_cache" ]; then
-            local cache_strip
-            cache_strip=$(sed -n 's/^CMAKE_STRIP:FILEPATH=//p' "$cmake_cache" | head -n1)
-            strip_cmd=$(validate_cross_tool_path "$cache_strip" "$cross_prefix" "strip")
-
-            local cache_objcopy
-            cache_objcopy=$(sed -n 's/^CMAKE_OBJCOPY:FILEPATH=//p' "$cmake_cache" | head -n1)
-            objcopy_cmd=$(validate_cross_tool_path "$cache_objcopy" "$cross_prefix" "objcopy")
-
-            local cache_compiler
-            cache_compiler=$(sed -n 's/^CMAKE_C_COMPILER:FILEPATH=//p' "$cmake_cache" | head -n1)
-            if [ -n "$cache_compiler" ]; then
-                compiler_dir="$(dirname "$cache_compiler")"
-            fi
-        fi
-    fi
-
-    # 构建候选目录列表
-    local candidate_dirs=()
-    [ -n "$compiler_dir" ] && candidate_dirs+=("$compiler_dir")
-    if [ -n "$TOOLCHAIN_ROOT_DIR" ]; then
-        candidate_dirs+=("$TOOLCHAIN_ROOT_DIR/bin" "$TOOLCHAIN_ROOT_DIR/usr/bin")
-    fi
-    if [ -n "$TOOLCHAIN" ]; then
-        candidate_dirs+=("$TOOLCHAIN/bin" "$TOOLCHAIN")
-    fi
-    if [ -n "$TOOLCHAIN_BIN_DIR" ]; then
-        candidate_dirs+=("$TOOLCHAIN_BIN_DIR")
-    fi
-    if [ -n "$toolchain_file" ]; then
-        local tf_dir
-        tf_dir="$(dirname "$toolchain_file")"
-        candidate_dirs+=("$tf_dir" "$tf_dir/bin" "$(dirname "$tf_dir")/bin")
-    fi
-
-    # 允许通过环境变量 CROSS_COMPILE 提供后备前缀
-    if [ -z "$cross_prefix" ] && [ -n "$CROSS_COMPILE" ]; then
-        cross_prefix="$(normalize_cross_prefix "$CROSS_COMPILE")"
-    fi
-
-    # 综合搜索 strip 与 objcopy
-    if [ -z "$strip_cmd" ]; then
-        strip_cmd=$(find_cross_tool_in_path "$cross_prefix" "strip")
-    fi
-    if [ -z "$objcopy_cmd" ]; then
-        objcopy_cmd=$(find_cross_tool_in_path "$cross_prefix" "objcopy")
-    fi
-
-    if [ -z "$strip_cmd" ]; then
-        strip_cmd=$(find_cross_tool_in_dirs "$cross_prefix" "strip" "${candidate_dirs[@]}")
-    fi
-    if [ -z "$objcopy_cmd" ]; then
-        objcopy_cmd=$(find_cross_tool_in_dirs "$cross_prefix" "objcopy" "${candidate_dirs[@]}")
-    fi
-
-    if [ -z "$strip_cmd" ]; then
-        local llvm_strip
-        llvm_strip=$(command -v llvm-strip 2>/dev/null || true)
-        if [ -z "$llvm_strip" ]; then
-            llvm_strip=$(find_tool_in_dirs "llvm-strip" "${candidate_dirs[@]}")
-        fi
-        strip_cmd=$(validate_cross_tool_path "$llvm_strip" "" "llvm-strip")
-    fi
-
-    if [ -z "$objcopy_cmd" ]; then
-        local llvm_objcopy
-        llvm_objcopy=$(command -v llvm-objcopy 2>/dev/null || true)
-        if [ -z "$llvm_objcopy" ]; then
-            llvm_objcopy=$(find_tool_in_dirs "llvm-objcopy" "${candidate_dirs[@]}")
-        fi
-        objcopy_cmd=$(validate_cross_tool_path "$llvm_objcopy" "" "llvm-objcopy")
-    fi
-
-    # 如果 CMakeCache 中的工具未匹配前缀，允许作为最终兜底
-    if [ -z "$strip_cmd" ]; then
-        strip_cmd=$(validate_cross_tool_path "$cache_strip" "" "strip")
-    fi
-    if [ -z "$objcopy_cmd" ]; then
-        objcopy_cmd=$(validate_cross_tool_path "$cache_objcopy" "" "objcopy")
-    fi
-    
-    if [ -n "$strip_cmd" ]; then
-        tools_status+="strip:$strip_cmd "
-    fi
-
-    if [ -n "$objcopy_cmd" ]; then
-        tools_status+="objcopy:$objcopy_cmd "
-    fi
-    
-    # 检查通用压缩工具
-    for tool in upx xz gzip; do
-        if command -v "$tool" &> /dev/null; then
-            tools_status="${tools_status}${tool}:${tool} "
-        fi
-    done
-    
-    echo "$tools_status"
 }
 
 # 检查必要的工具
@@ -832,22 +492,6 @@ get_target_config() {
     esac
 }
 
-# 根据构建类型返回实际输出目录
-get_output_dir_for_build_type() {
-    local base_dir="$1"
-
-    if [ -z "$base_dir" ]; then
-        echo ""
-        return 0
-    fi
-
-    if [ "$BUILD_TYPE_LOWER" = "debug" ]; then
-        echo "${base_dir}-debug"
-    else
-        echo "$base_dir"
-    fi
-}
-
 # 获取默认编译目标列表
 get_default_build_targets() {
     # 如果私有变量不存在或为空，返回所有目标的配置
@@ -901,6 +545,9 @@ validate_target() {
 # 参数解析
 parse_arguments() {
     local target=""
+    
+    reset_build_type_state
+    PARSED_TARGET=""
     
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -1152,45 +799,47 @@ clean_all() {
 
 # 帮助信息
 show_help() {
-    echo "RK MPP Build Script"
-    echo ""
-    echo "Usage: $0 [OPTIONS] [TARGET]"
-    echo ""
-    echo "TARGET (optional):"
-    echo "  arm-linux-gnueabihf    Build ARM 32-bit glibc version"
-    echo "  aarch64-linux-gnu      Build ARM 64-bit glibc version"
-    echo "  riscv64-linux-gnu      Build RISC-V 64-bit glibc version"
-    echo "  arm-linux-musleabihf   Build ARM 32-bit musl version"
-    echo "  aarch64-linux-musl     Build ARM 64-bit musl version"
-    echo "  riscv64-linux-musl     Build RISC-V 64-bit musl version"
-    echo "  aarch64-linux-android  Build Android ARM 64-bit version"
-    echo "  arm-linux-android      Build Android ARM 32-bit version"
-    echo "  x86_64-linux-gnu       Build x86_64 Linux version"
-    echo "  x86_64-windows-gnu     Build x86_64 Windows version"
-    echo "  x86_64-macos           Build x86_64 macOS version"
-    echo "  aarch64-macos          Build ARM 64-bit macOS version"
-    echo ""
-    echo "Options:"
-    echo "  -h, --help             Show this help message"
-    echo "  -c, --clean            Clean build directories only"
-    echo "  --clean-all            Clean all (sources and outputs)"
-    echo "  --build_type=TYPE      Specify CMake build type (Debug or Release, default: Release)"
-    echo ""
-    echo "Environment Variables:"
-    echo "  TOOLCHAIN_ROOT_DIR    Path to cross-compilation toolchain (optional)"
-    echo "  ANDROID_NDK_HOME      Path to Android NDK (default: ~/sdk/android_ndk/android-ndk-r25c)"
-    echo ""
-    echo "Examples:"
-    echo "  $0                    # Build default targets (aarch64-linux-gnu, arm-linux-gnueabihf, aarch64-linux-android, arm-linux-android)"
-    echo "  $0 aarch64-linux-gnu  # Build only ARM 64-bit glibc version"
-    echo "  $0 arm-linux-musleabihf # Build only ARM 32-bit musl version"
-    echo "  $0 aarch64-linux-android # Build Android ARM 64-bit version"
-    echo "  $0 arm-linux-android   # Build Android ARM 32-bit version"
-    echo "  $0 x86_64-linux-gnu   # Build x86_64 Linux version"
-    echo "  $0 --clean           # Clean build directories"
-    echo "  $0 --clean-all       # Clean everything"
-    echo "  $0 --build_type Debug aarch64-linux-gnu  # Build Debug variant for ARM64"
-    echo ""
+        local script_name
+        script_name="$(basename "$0")"
+
+        cat <<EOF
+RK MPP Build Script
+
+Usage: ./${script_name} [OPTIONS] [TARGET]
+
+TARGET (optional):
+    arm-linux-gnueabihf    Build ARM 32-bit glibc version
+    aarch64-linux-gnu      Build ARM 64-bit glibc version
+    riscv64-linux-gnu      Build RISC-V 64-bit glibc version
+    arm-linux-musleabihf   Build ARM 32-bit musl version
+    aarch64-linux-musl     Build ARM 64-bit musl version
+    riscv64-linux-musl     Build RISC-V 64-bit musl version
+    aarch64-linux-android  Build Android ARM 64-bit version
+    arm-linux-android      Build Android ARM 32-bit version
+    x86_64-linux-gnu       Build x86_64 Linux version
+    x86_64-windows-gnu     Build x86_64 Windows version
+    x86_64-macos           Build x86_64 macOS version
+    aarch64-macos          Build ARM 64-bit macOS version
+
+Options:
+    -h, --help                        Show this help message
+    -c, --clean                       Clean build directories only
+    --clean-all                       Clean all (sources and outputs)
+    --build_type {Debug|Release}      Specify CMake build type (default: Release)
+
+Environment Variables:
+    TOOLCHAIN_ROOT_DIR    Path to cross-compilation toolchain (optional)
+    ANDROID_NDK_HOME      Path to Android NDK (default: ~/sdk/android_ndk/android-ndk-r25c)
+
+Examples:
+    ./${script_name}                                # Build default targets
+    ./${script_name} aarch64-linux-gnu              # Build ARM 64-bit glibc version
+    ./${script_name} arm-linux-musleabihf           # Build ARM 32-bit musl version
+    ./${script_name} aarch64-linux-android          # Build Android ARM 64-bit version
+    ./${script_name} --clean                        # Clean build directories
+    ./${script_name} --clean-all                    # Clean everything
+    ./${script_name} --build_type Debug aarch64-linux-gnu  # Debug build for ARM64
+EOF
 }
 
 # 信号处理

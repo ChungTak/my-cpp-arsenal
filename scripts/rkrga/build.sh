@@ -13,168 +13,13 @@ OUTPUTS_DIR="${WORKSPACE_DIR}/outputs"
 RKRGA_OUTPUT_DIR="${OUTPUTS_DIR}/rkrga"
 LIBRGA_SOURCE_DIR="${SOURCES_DIR}/rkrga"
 
-# 构建类型默认配置
-BUILD_TYPE="Release"
-BUILD_TYPE_LOWER="release"
-BUILD_TYPE_SET="false"
-PARSED_TARGET=""
+source "${SCRIPT_DIR}/../common.sh"
 
-# 默认构建类型配置
-BUILD_TYPE="Release"
-BUILD_TYPE_LOWER="release"
-BUILD_TYPE_SET="false"
+reset_build_type_state
 PARSED_TARGET=""
 
 # 限制默认编译目标
 _DEFAULT_BUILD_TARGETS="aarch64-linux-gnu,arm-linux-gnueabihf,aarch64-linux-android,arm-linux-android"
-
-# 颜色输出
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
-
-log_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
-log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
-log_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
-log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
-
-set_build_type_from_arg() {
-    local value="$1"
-
-    if [ -z "$value" ]; then
-        log_error "Missing value for --build_type"
-        exit 1
-    fi
-
-    local normalized
-    normalized=$(echo "$value" | tr '[:upper:]' '[:lower:]')
-
-    case "$normalized" in
-        debug)
-            if [ "$BUILD_TYPE_SET" = "true" ] && [ "$BUILD_TYPE_LOWER" != "debug" ]; then
-                log_error "Conflicting build type arguments detected"
-                exit 1
-            fi
-            BUILD_TYPE="Debug"
-            BUILD_TYPE_LOWER="debug"
-            BUILD_TYPE_SET="true"
-            ;;
-        release)
-            if [ "$BUILD_TYPE_SET" = "true" ] && [ "$BUILD_TYPE_LOWER" != "release" ]; then
-                log_error "Conflicting build type arguments detected"
-                exit 1
-            fi
-            BUILD_TYPE="Release"
-            BUILD_TYPE_LOWER="release"
-            BUILD_TYPE_SET="true"
-            ;;
-        *)
-            log_error "Invalid build type value: $value (expected Debug or Release)"
-            exit 1
-            ;;
-    esac
-}
-
-set_build_type_from_arg() {
-    local value="$1"
-
-    if [ -z "$value" ]; then
-        log_error "Missing value for --build_type"
-        exit 1
-    fi
-
-    local normalized
-    normalized=$(echo "$value" | tr '[:upper:]' '[:lower:]')
-
-    case "$normalized" in
-        debug)
-            if [ "$BUILD_TYPE_SET" = "true" ] && [ "$BUILD_TYPE_LOWER" != "debug" ]; then
-                log_error "Conflicting build type arguments detected"
-                exit 1
-            fi
-            BUILD_TYPE="Debug"
-            BUILD_TYPE_LOWER="debug"
-            BUILD_TYPE_SET="true"
-            ;;
-        release)
-            if [ "$BUILD_TYPE_SET" = "true" ] && [ "$BUILD_TYPE_LOWER" != "release" ]; then
-                log_error "Conflicting build type arguments detected"
-                exit 1
-            fi
-            BUILD_TYPE="Release"
-            BUILD_TYPE_LOWER="release"
-            BUILD_TYPE_SET="true"
-            ;;
-        *)
-            log_error "Invalid build type value: $value (expected Debug or Release)"
-            exit 1
-            ;;
-    esac
-}
-
-# 检查工具
-check_tools() {
-    local required_tools=("meson" "ninja" "git")
-    local missing_tools=()
-    
-    for tool in "${required_tools[@]}"; do
-        if ! command -v "$tool" &> /dev/null; then
-            missing_tools+=("$tool")
-        fi
-    done
-    
-    if [ ${#missing_tools[@]} -gt 0 ]; then
-        log_error "Missing required tools: ${missing_tools[*]}"
-        exit 1
-    fi
-}
-
-# 克隆源码
-clone_librga() {
-    if [ -d "${LIBRGA_SOURCE_DIR}" ] && [ -f "${LIBRGA_SOURCE_DIR}/meson.build" ]; then
-        log_success "librga source already exists"
-        return 0
-    fi
-    
-    mkdir -p "${SOURCES_DIR}"
-    if [ -d "${LIBRGA_SOURCE_DIR}" ]; then
-        rm -rf "${LIBRGA_SOURCE_DIR}"
-    fi
-    
-    log_info "Cloning librga repository..."
-    git clone -b jellyfin-rga --depth=1 https://github.com/nyanmisaka/rk-mirrors.git "${LIBRGA_SOURCE_DIR}"
-    
-    if [ $? -eq 0 ]; then
-        log_success "librga cloned successfully"
-    else
-        log_error "Failed to clone librga"
-        exit 1
-    fi
-}
-
-# 应用 meson 时钟偏差补丁
-apply_meson_clockskew_patch() {
-    log_info "Applying meson clockskew patch..."
-    
-    local patch_script="${WORKSPACE_DIR}/patches/patch_meson_clockskew.py"
-    
-    if [ ! -f "$patch_script" ]; then
-        log_warning "Meson clockskew patch script not found: $patch_script"
-        log_warning "Compilation may fail due to clock skew issues"
-        return 0
-    fi
-    
-    # 运行补丁脚本
-    if python3 "$patch_script"; then
-        log_success "Meson clockskew patch applied successfully"
-    else
-        log_warning "Failed to apply meson clockskew patch"
-        log_warning "Compilation may fail due to clock skew issues"
-    fi
-}
-
 
 # 目标配置映射
 declare -A TARGET_CONFIGS=(
@@ -195,20 +40,68 @@ declare -A TARGET_CONFIGS=(
 # 记录成功构建的输出目录
 declare -a COMPLETED_OUTPUT_DIRS=()
 
+# 检查必要工具
+check_tools() {
+    local required_tools=("git" "meson" "ninja" "pkg-config")
+    for tool in "${required_tools[@]}"; do
+        if ! command -v "$tool" > /dev/null 2>&1; then
+            log_error "Missing required tool: $tool"
+            exit 1
+        fi
+    done
+}
+
+# 克隆/更新 librga 源码
+clone_librga() {
+    log_info "Checking librga repository..."
+
+    mkdir -p "${SOURCES_DIR}"
+
+    if [ -d "${LIBRGA_SOURCE_DIR}" ] && [ -f "${LIBRGA_SOURCE_DIR}/meson.build" ]; then
+        log_success "librga source already exists, skipping clone"
+        return 0
+    fi
+
+    if [ -d "${LIBRGA_SOURCE_DIR}" ]; then
+        log_warning "Removing incomplete librga directory"
+        rm -rf "${LIBRGA_SOURCE_DIR}"
+    fi
+
+    local repo_url="https://github.com/rockchip-linux/rga.git"
+    log_info "Cloning librga repository from ${repo_url}..."
+
+    if git clone --depth=1 "$repo_url" "${LIBRGA_SOURCE_DIR}"; then
+        log_success "librga repository cloned successfully"
+    else
+        log_error "Failed to clone librga repository"
+        exit 1
+    fi
+}
+
+# 应用 meson clockskew 补丁
+apply_meson_clockskew_patch() {
+    log_info "Applying meson clockskew patch..."
+
+    local patch_script="${WORKSPACE_DIR}/patches/patch_meson_clockskew.py"
+
+    if [ ! -f "$patch_script" ]; then
+        log_warning "Meson clockskew patch script not found: $patch_script"
+        log_warning "Compilation may fail due to clock skew issues"
+        return 0
+    fi
+
+    if python3 "$patch_script"; then
+        log_success "Meson clockskew patch applied successfully"
+    else
+        log_warning "Failed to apply meson clockskew patch"
+        log_warning "Compilation may fail due to clock skew issues"
+    fi
+}
+
 # 获取目标配置
 get_target_config() {
     local target="$1"
     echo "${TARGET_CONFIGS[$target]:-}"
-}
-
-get_output_dir_for_build_type() {
-    local base_dir="$1"
-
-    if [ "$BUILD_TYPE_LOWER" = "debug" ]; then
-        echo "${base_dir}-debug"
-    else
-        echo "$base_dir"
-    fi
 }
 
 # 检查并构建 libdrm 依赖
@@ -373,7 +266,7 @@ build_target() {
     local cross_prefix
     cross_prefix=$(get_cross_compile_prefix "$target_name")
     local available_tools
-    available_tools=$(check_cross_compile_tools "$cross_prefix")
+    available_tools=$(check_cross_compile_tools "$cross_prefix" "$target_name")
     
     # 压缩库文件
     if [ "$BUILD_TYPE_LOWER" = "debug" ]; then
@@ -597,7 +490,7 @@ compress_libraries() {
     
     # 如果没有传入 available_tools，则检测工具
     if [ -z "$available_tools" ]; then
-        available_tools=$(check_cross_compile_tools "$cross_prefix")
+        available_tools=$(check_cross_compile_tools "$cross_prefix" "$target_name")
     fi
     
     local lib_files
@@ -824,10 +717,8 @@ build_multiple_targets() {
 
 parse_arguments() {
     local target=""
-
-    BUILD_TYPE="Release"
-    BUILD_TYPE_LOWER="release"
-    BUILD_TYPE_SET="false"
+    
+    reset_build_type_state
     PARSED_TARGET=""
 
     while [[ $# -gt 0 ]]; do
@@ -926,51 +817,42 @@ main() {
 
 # 帮助信息
 show_help() {
-    echo "RK RGA Build Script (Meson)"
-    echo ""
-    echo "Usage: $0 [OPTIONS] [TARGET]"
-    echo ""
-    echo "Options:"
-    printf "  %-25s %s\n" "--build_type {Debug,Release}" "Set build type (default: Release)"
-    printf "  %-25s %s\n" "-h, --help" "Show this help message"
-    echo ""
-    echo "TARGET (optional):"
-    
-    # 使用目标配置映射生成帮助信息
-    local target_descriptions=(
-        "aarch64-linux-gnu:Build ARM 64-bit glibc version"
-        "arm-linux-gnueabihf:Build ARM 32-bit glibc version"
-        "aarch64-linux-musl:Build ARM 64-bit musl version"
-        "arm-linux-musleabihf:Build ARM 32-bit musl version"
-        "riscv64-linux-gnu:Build RISC-V 64-bit glibc version"
-        "riscv64-linux-musl:Build RISC-V 64-bit musl version"
-        "aarch64-linux-android:Build Android ARM 64-bit version"
-        "arm-linux-android:Build Android ARM 32-bit version"
-        "x86_64-linux-gnu:Build x86 64-bit Linux version"
-        "x86_64-windows-gnu:Build x86 64-bit Windows version"
-        "x86_64-macos:Build x86 64-bit macOS version"
-        "aarch64-macos:Build ARM 64-bit macOS version"
-    )
-    
-    for desc in "${target_descriptions[@]}"; do
-        IFS=':' read -r target description <<< "$desc"
-        printf "  %-25s %s\n" "$target" "$description"
-    done
-    
-    echo ""
-    echo "Examples:"
-    echo "  $0                                # Build default targets ($_DEFAULT_BUILD_TARGETS)"
-    echo "  $0 aarch64-linux-gnu              # Build only ARM 64-bit GNU libc version"
-    echo "  $0 --build_type Debug aarch64-linux-gnu  # Debug build with -debug suffix"
-    echo "  $0 aarch64-linux-android          # Build Android ARM 64-bit version"
-    echo "  $0 arm-linux-musleabihf           # Build ARM 32-bit musl version"
-    echo "  $0 aarch64-linux-musl             # Build ARM 64-bit musl version"
-    echo "  $0 x86_64-linux-gnu               # Build x86 64-bit Linux version"
-    echo "  $0 --clean                        # Clean all build artifacts"
-    echo ""
-    echo "Environment Variables:"
-    echo "  ANDROID_NDK_HOME      Path to Android NDK (default: ~/sdk/android_ndk/android-ndk-r25c)"
-    echo ""
+        local script_name
+        script_name="$(basename "$0")"
+
+        cat <<EOF
+RK RGA Build Script (Meson)
+
+Usage: ./${script_name} [OPTIONS] [TARGET]
+
+Options:
+    --build_type {Debug|Release}  Set build type (default: Release)
+    -h, --help                    Show this help message
+
+TARGET (optional):
+    aarch64-linux-gnu      Build ARM 64-bit glibc version
+    arm-linux-gnueabihf    Build ARM 32-bit glibc version
+    aarch64-linux-musl     Build ARM 64-bit musl version
+    arm-linux-musleabihf   Build ARM 32-bit musl version
+    riscv64-linux-gnu      Build RISC-V 64-bit glibc version
+    riscv64-linux-musl     Build RISC-V 64-bit musl version
+    aarch64-linux-android  Build Android ARM 64-bit version
+    arm-linux-android      Build Android ARM 32-bit version
+    x86_64-linux-gnu       Build x86_64 Linux version
+    x86_64-windows-gnu     Build x86_64 Windows version
+    x86_64-macos           Build x86_64 macOS version
+    aarch64-macos          Build ARM 64-bit macOS version
+
+Examples:
+    ./${script_name}                                # Build default targets (${_DEFAULT_BUILD_TARGETS})
+    ./${script_name} aarch64-linux-gnu              # Build ARM 64-bit GNU libc version
+    ./${script_name} --build_type Debug aarch64-linux-gnu  # Debug build with -debug suffix
+    ./${script_name} aarch64-linux-android          # Build Android ARM 64-bit version
+    ./${script_name} --clean                        # Clean build artifacts
+
+Environment Variables:
+    ANDROID_NDK_HOME      Path to Android NDK (default: ~/sdk/android_ndk/android-ndk-r25c)
+EOF
 }
 
 # 创建版本信息文件
