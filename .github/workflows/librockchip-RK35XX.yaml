@@ -41,16 +41,6 @@ jobs:
           repository: ChungTak/my-cpp-arsenal
           submodules: true
 
-      - name: 创建构建用户
-        shell: bash
-        run: |
-          if ! id builduser >/dev/null 2>&1; then
-            useradd -m -s /bin/bash builduser
-          fi
-          echo 'builduser ALL=(ALL) NOPASSWD:ALL' >/etc/sudoers.d/builduser
-          chmod 0440 /etc/sudoers.d/builduser
-          chown -R builduser:builduser "$GITHUB_WORKSPACE"
-
       - name: 升级 pip 并安装 Meson 与 CMake
         shell: bash
         run: |
@@ -74,7 +64,7 @@ jobs:
         shell: bash
         run: |
           chmod +x install_toolchain.sh
-          sudo -u builduser -H bash -lc "cd \"$GITHUB_WORKSPACE\" && ./install_toolchain.sh"
+          ./install_toolchain.sh
 
       - name: 准备 librockchip 构建脚本
         shell: bash
