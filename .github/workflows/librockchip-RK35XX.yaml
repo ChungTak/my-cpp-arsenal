@@ -64,7 +64,7 @@ jobs:
         shell: bash
         run: |
           chmod +x install_toolchain.sh
-          ./install_toolchain.sh
+          ALLOW_ROOT=1 ./install_toolchain.sh
 
       - name: 准备 librockchip 构建脚本
         shell: bash

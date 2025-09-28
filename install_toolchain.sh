@@ -66,11 +66,11 @@ check_network() {
 update_system() {
     log_info "更新系统包列表..."
     
-    apt update
+    sudo apt update
     log_success "包列表更新完成"
     
     log_info "安装基础构建工具..."
-    apt install -y build-essential cmake git wget curl
+    sudo apt install -y build-essential cmake git wget curl
     log_success "基础构建工具安装完成"
 }
 
@@ -80,15 +80,15 @@ install_gnu_toolchains() {
     
     # ARM 32位
     log_info "安装 arm-linux-gnu-gcc..."
-    apt install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libc6-dev-armhf-cross
+    sudo apt install -y gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf libc6-dev-armhf-cross
     
     # ARM 64位
     log_info "安装 aarch64-linux-gnu-gcc..."
-    apt install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross
+    sudo apt install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross
     
     # RISC-V 64位
     log_info "安装 riscv64-linux-gnu-gcc..."
-    apt install -y gcc-riscv64-linux-gnu g++-riscv64-linux-gnu libc6-dev-riscv64-cross
+    sudo apt install -y gcc-riscv64-linux-gnu g++-riscv64-linux-gnu libc6-dev-riscv64-cross
     
     log_success "GNU 交叉编译工具链安装完成"
 }
@@ -119,7 +119,7 @@ install_musl_toolchains() {
     log_info "开始安装 musl 交叉编译工具链..."
     
     # 创建工具链目录
-    mkdir -p /opt/cross
+    sudo mkdir -p /opt/cross
     cd /tmp
     
     # 下载并安装 aarch64-linux-musl
@@ -127,21 +127,21 @@ install_musl_toolchains() {
     if [[ ! -f aarch64-linux-musl-cross.tgz ]]; then
         wget -O aarch64-linux-musl-cross.tgz "https://more.musl.cc/10/x86_64-linux-musl/aarch64-linux-musl-cross.tgz"
     fi
-    tar -xzf aarch64-linux-musl-cross.tgz -C /opt/cross/
+    sudo tar -xzf aarch64-linux-musl-cross.tgz -C /opt/cross/
     
     # 下载并安装 arm-linux-musl
     log_info "下载并安装 arm-linux-musl-gcc..."
     if [[ ! -f arm-linux-musleabihf-cross.tgz ]]; then
         wget -O arm-linux-musleabihf-cross.tgz "https://more.musl.cc/10/x86_64-linux-musl/arm-linux-musleabihf-cross.tgz"
     fi
-    tar -xzf arm-linux-musleabihf-cross.tgz -C /opt/cross/
+    sudo tar -xzf arm-linux-musleabihf-cross.tgz -C /opt/cross/
     
     # 下载并安装 riscv64-linux-musl
     log_info "下载并安装 riscv64-linux-musl-gcc..."
     if [[ ! -f riscv64-linux-musl-cross.tgz ]]; then
         wget -O riscv64-linux-musl-cross.tgz "https://more.musl.cc/10/x86_64-linux-musl/riscv64-linux-musl-cross.tgz"
     fi
-    tar -xzf riscv64-linux-musl-cross.tgz -C /opt/cross/
+    sudo tar -xzf riscv64-linux-musl-cross.tgz -C /opt/cross/
     
     log_success "musl 交叉编译工具链下载完成"
 }
@@ -154,7 +154,7 @@ setup_environment() {
     local profile_file="/etc/profile.d/cross-toolchain.sh"
     
     # 创建全局环境配置文件
-    tee "$profile_file" > /dev/null << 'EOF'
+    sudo tee "$profile_file" > /dev/null << 'EOF'
 # 交叉编译工具链环境配置
 export CROSS_TOOLCHAIN_ROOT="/opt/cross"
 
@@ -169,7 +169,7 @@ alias arm-musl-gcc='arm-linux-musleabihf-gcc'
 alias riscv64-musl-gcc='riscv64-linux-musl-gcc'
 EOF
 
-    chmod +x "$profile_file"
+    sudo chmod +x "$profile_file"
     
     # 为当前用户添加到 .bashrc
     if ! grep -q "/opt/cross" "$bashrc_file" 2>/dev/null; then
@@ -377,15 +377,20 @@ main() {
     
     # 检查是否以 root 身份运行
     if [[ $EUID -eq 0 ]]; then
-        log_error "请不要以 root 身份运行此脚本"
-        exit 1
+        if [[ "${ALLOW_ROOT:-}" = "1" ]]; then
+            log_warning "检测到以 root 身份运行，已根据 ALLOW_ROOT=1 继续执行"
+        else
+            log_error "请不要以 root 身份运行此脚本"
+            log_info "如需在 CI 等环境中允许 root 执行，请设置环境变量 ALLOW_ROOT=1"
+            exit 1
+        fi
     fi
     
-    # 检查 权限
-    if ! -n true 2>/dev/null; then
-        log_info "此脚本需要 权限，请输入密码"
-        true || {
-            log_error "需要 权限才能继续"
+    # 检查 sudo 权限
+    if ! sudo -n true 2>/dev/null; then
+        log_info "此脚本需要 sudo 权限，请输入密码"
+        sudo true || {
+            log_error "需要 sudo 权限才能继续"
             exit 1
         }
     fi
