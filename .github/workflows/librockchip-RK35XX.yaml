@@ -19,12 +19,20 @@ jobs:
       - name: 准备容器环境
         shell: bash
         run: |
+          export DEBIAN_FRONTEND=noninteractive
+          export TZ=Etc/UTC
           if command -v sudo >/dev/null 2>&1; then
+            sudo ln -fs /usr/share/zoneinfo/"$TZ" /etc/localtime
             sudo apt-get update
-            sudo apt-get install -y git build-essential unzip curl wget ninja-build pkg-config
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tzdata
+            sudo dpkg-reconfigure --frontend noninteractive tzdata
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y git build-essential unzip curl wget ninja-build pkg-config
           else
+            ln -fs /usr/share/zoneinfo/"$TZ" /etc/localtime
             apt-get update
-            apt-get install -y git build-essential unzip curl wget ninja-build pkg-config
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tzdata
+            dpkg-reconfigure --frontend noninteractive tzdata
+            DEBIAN_FRONTEND=noninteractive apt-get install -y git build-essential unzip curl wget ninja-build pkg-config
           fi
 
       - name: 检出仓库
