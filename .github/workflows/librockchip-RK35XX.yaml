@@ -9,10 +9,24 @@ permissions:
 jobs:
   build:
     name: Build and Release
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:20.04
+      options: --user root
     env:
       OUTPUT_ROOT: outputs/librockchip_rk35xx
     steps:
+      - name: 准备容器环境
+        shell: bash
+        run: |
+          if command -v sudo >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y git build-essential unzip curl wget ninja-build pkg-config
+          else
+            apt-get update
+            apt-get install -y git build-essential unzip curl wget ninja-build pkg-config
+          fi
+
       - name: 检出仓库
         uses: actions/checkout@v4
         with:
@@ -23,12 +37,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-
-      - name: 安装系统构建依赖
-        shell: bash
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential unzip curl wget ninja-build pkg-config
 
       - name: 升级 pip 并安装 Meson 与 CMake
         shell: bash
@@ -55,11 +63,29 @@ jobs:
           chmod +x install_toolchain.sh
           ./install_toolchain.sh
 
-      - name: 构建 librockchip RK35XX
+      - name: 准备 librockchip 构建脚本
         shell: bash
-        run: |
-          chmod +x scripts/librockchip/build_rk35xx.sh
-          ./scripts/librockchip/build_rk35xx.sh
+        run: chmod +x scripts/librockchip/build_rk35xx.sh
+
+      - name: 构建 librockchip RK35XX (aarch64-linux-gnu-debug)
+        shell: bash
+        run: ./scripts/librockchip/build_rk35xx.sh aarch64-linux-gnu-debug
+
+      - name: 构建 librockchip RK35XX (aarch64-linux-gnu)
+        shell: bash
+        run: ./scripts/librockchip/build_rk35xx.sh aarch64-linux-gnu
+
+      - name: 构建 librockchip RK35XX (arm-linux-gnueabihf)
+        shell: bash
+        run: ./scripts/librockchip/build_rk35xx.sh arm-linux-gnueabihf
+
+      - name: 构建 librockchip RK35XX (aarch64-linux-android)
+        shell: bash
+        run: ./scripts/librockchip/build_rk35xx.sh aarch64-linux-android
+
+      - name: 构建 librockchip RK35XX (arm-linux-android)
+        shell: bash
+        run: ./scripts/librockchip/build_rk35xx.sh arm-linux-android
 
       - name: 压缩构建产物
         shell: bash
