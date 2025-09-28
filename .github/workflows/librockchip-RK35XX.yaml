@@ -2,11 +2,6 @@ name: Build librockchip RK35XX
 
 on:
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'Release version (格式: YYYYMMDD，留空则使用当前日期)'
-        required: false
-        default: ''
 
 permissions:
   contents: write
@@ -18,18 +13,6 @@ jobs:
     env:
       OUTPUT_ROOT: outputs/librockchip_rk35xx
     steps:
-      - name: 确定版本号
-        id: version
-        shell: bash
-        run: |
-          if [ -z "${{ github.event.inputs.version }}" ]; then
-            version=$(date +%Y%m%d)
-          else
-            version="${{ github.event.inputs.version }}"
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "release_tag=librockchip-$version" >> "$GITHUB_OUTPUT"
-
       - name: 检出仓库
         uses: actions/checkout@v4
         with:
@@ -90,6 +73,30 @@ jobs:
             fi
             tar -czf "$dir.tar.gz" "$dir"
           done
+
+      - name: 解析版本号
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_file="$OUTPUT_ROOT/release.txt"
+          if [ ! -f "$release_file" ]; then
+            echo "::error::未找到 release 文件 $release_file" >&2
+            exit 1
+          fi
+          version_line=$(grep -E '^rknpu2=' "$release_file" | head -n1 || true)
+          if [ -z "$version_line" ]; then
+            echo "::error::无法在 $release_file 中找到 rknpu2= 行" >&2
+            exit 1
+          fi
+          version=${version_line#rknpu2=}
+          version=$(echo "$version" | tr -d ' \r\n\t')
+          if [ -z "$version" ]; then
+            echo "::error::解析到的 rknpu2 版本为空" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "release_tag=librockchip-$version" >> "$GITHUB_OUTPUT"
 
       - name: 发布 Release
         uses: ncipollo/release-action@v1
