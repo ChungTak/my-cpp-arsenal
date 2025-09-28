@@ -1,6 +1,6 @@
 outputs
 sources
-temp
+temp*
 __pycache__
 cache
 build
