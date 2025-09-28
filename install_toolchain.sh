@@ -379,20 +379,32 @@ main() {
     if [[ $EUID -eq 0 ]]; then
         if [[ "${ALLOW_ROOT:-}" = "1" ]]; then
             log_warning "检测到以 root 身份运行，已根据 ALLOW_ROOT=1 继续执行"
+            if ! command -v sudo >/dev/null 2>&1; then
+                sudo() {
+                    "$@"
+                }
+            fi
         else
             log_error "请不要以 root 身份运行此脚本"
             log_info "如需在 CI 等环境中允许 root 执行，请设置环境变量 ALLOW_ROOT=1"
             exit 1
         fi
     fi
-    
-    # 检查 sudo 权限
-    if ! sudo -n true 2>/dev/null; then
-        log_info "此脚本需要 sudo 权限，请输入密码"
-        sudo true || {
+
+    # 检查 sudo 权限（非 root 环境需要）
+    if [[ $EUID -ne 0 ]]; then
+        if ! command -v sudo >/dev/null 2>&1; then
             log_error "需要 sudo 权限才能继续"
             exit 1
-        }
+        fi
+
+        if ! sudo -n true 2>/dev/null; then
+            log_info "此脚本需要 sudo 权限，请输入密码"
+            sudo true || {
+                log_error "需要 sudo 权限才能继续"
+                exit 1
+            }
+        fi
     fi
     
     # 执行安装步骤
