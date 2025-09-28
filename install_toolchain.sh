@@ -125,21 +125,21 @@ install_musl_toolchains() {
     # 下载并安装 aarch64-linux-musl
     log_info "下载并安装 aarch64-linux-musl-gcc..."
     if [[ ! -f aarch64-linux-musl-cross.tgz ]]; then
-        wget -O aarch64-linux-musl-cross.tgz "https://more.musl.cc/10/x86_64-linux-musl/aarch64-linux-musl-cross.tgz"
+        wget --no-check-certificate -O aarch64-linux-musl-cross.tgz "http://more.musl.cc/10/x86_64-linux-musl/aarch64-linux-musl-cross.tgz"
     fi
     sudo tar -xzf aarch64-linux-musl-cross.tgz -C /opt/cross/
     
     # 下载并安装 arm-linux-musl
     log_info "下载并安装 arm-linux-musl-gcc..."
     if [[ ! -f arm-linux-musleabihf-cross.tgz ]]; then
-        wget -O arm-linux-musleabihf-cross.tgz "https://more.musl.cc/10/x86_64-linux-musl/arm-linux-musleabihf-cross.tgz"
+        wget --no-check-certificate -O arm-linux-musleabihf-cross.tgz "http://more.musl.cc/10/x86_64-linux-musl/arm-linux-musleabihf-cross.tgz"
     fi
     sudo tar -xzf arm-linux-musleabihf-cross.tgz -C /opt/cross/
     
     # 下载并安装 riscv64-linux-musl
     log_info "下载并安装 riscv64-linux-musl-gcc..."
     if [[ ! -f riscv64-linux-musl-cross.tgz ]]; then
-        wget -O riscv64-linux-musl-cross.tgz "https://more.musl.cc/10/x86_64-linux-musl/riscv64-linux-musl-cross.tgz"
+        wget --no-check-certificate -O riscv64-linux-musl-cross.tgz "http://more.musl.cc/10/x86_64-linux-musl/riscv64-linux-musl-cross.tgz"
     fi
     sudo tar -xzf riscv64-linux-musl-cross.tgz -C /opt/cross/
     
