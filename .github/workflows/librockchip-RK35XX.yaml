@@ -11,7 +11,7 @@ jobs:
     name: Build and Release
     runs-on: ubuntu-latest
     container:
-      image: ubuntu:20.04
+      image: ubuntu:focal-20200423
       options: --user root
     env:
       OUTPUT_ROOT: outputs/librockchip_rk35xx
@@ -64,7 +64,7 @@ jobs:
         shell: bash
         run: |
           chmod +x install_toolchain.sh
-          ALLOW_ROOT=1 ./install_toolchain.sh
+          ALLOW_ROOT=1 ./install_toolchain.sh --gnu-only --skip-test
 
       - name: 准备 librockchip 构建脚本
         shell: bash

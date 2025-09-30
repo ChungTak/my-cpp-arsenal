@@ -427,6 +427,8 @@ main() {
         verify_musl_toolchains || {
             log_warning "musl 工具链验证失败，但安装可能已完成"
         }
+    else
+        log_info "检测到 --gnu-only，已跳过 musl 工具链安装"
     fi
     
     # 测试工具链（如果没有跳过）
