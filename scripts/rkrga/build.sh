@@ -67,10 +67,10 @@ clone_librga() {
         rm -rf "${LIBRGA_SOURCE_DIR}"
     fi
 
-    local repo_url="https://github.com/rockchip-linux/rga.git"
+    local repo_url="https://github.com/nyanmisaka/rk-mirrors.git"
     log_info "Cloning librga repository from ${repo_url}..."
 
-    if git clone --depth=1 "$repo_url" "${LIBRGA_SOURCE_DIR}"; then
+    if git clone -b jellyfin-rga --depth=1  "$repo_url" "${LIBRGA_SOURCE_DIR}"; then
         log_success "librga repository cloned successfully"
     else
         log_error "Failed to clone librga repository"
