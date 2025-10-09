@@ -26,13 +26,13 @@ jobs:
             sudo apt-get update
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tzdata
             sudo dpkg-reconfigure --frontend noninteractive tzdata
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y git build-essential unzip curl wget ninja-build pkg-config python3 python3-pip python3-venv
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y git build-essential unzip curl wget ninja-build pkg-config python3 python3-pip python3-venv linux-libc-dev-arm64-cross linux-libc-dev-armhf-cross
           else
             ln -fs /usr/share/zoneinfo/"$TZ" /etc/localtime
             apt-get update
             DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tzdata
             dpkg-reconfigure --frontend noninteractive tzdata
-            DEBIAN_FRONTEND=noninteractive apt-get install -y git build-essential unzip curl wget ninja-build pkg-config python3 python3-pip python3-venv
+            DEBIAN_FRONTEND=noninteractive apt-get install -y git build-essential unzip curl wget ninja-build pkg-config python3 python3-pip python3-venv linux-libc-dev-arm64-cross linux-libc-dev-armhf-cross
           fi
 
       - name: 检出仓库
