@@ -189,6 +189,27 @@ find_cross_tool_in_path() {
         return 1
     fi
 
+    local candidate_dirs=()
+    if [ -n "${TOOLCHAIN_ROOT_DIR:-}" ]; then
+        candidate_dirs+=("${TOOLCHAIN_ROOT_DIR%/}/bin" "${TOOLCHAIN_ROOT_DIR%/}/usr/bin")
+    fi
+    if [ -n "${TOOLCHAIN_BIN_DIR:-}" ]; then
+        candidate_dirs+=("${TOOLCHAIN_BIN_DIR%/}")
+    fi
+    if [ -n "${TOOLCHAIN:-}" ]; then
+        candidate_dirs+=("${TOOLCHAIN%/}/bin" "${TOOLCHAIN%/}")
+    fi
+
+    if [ ${#candidate_dirs[@]} -gt 0 ]; then
+        local resolved
+        resolved="$(find_cross_tool_in_dirs "$cross_prefix" "$tool_name" "${candidate_dirs[@]}")"
+        resolved="$(validate_cross_tool_path "$resolved" "$cross_prefix" "$tool_name")"
+        if [ -n "$resolved" ]; then
+            echo "$resolved"
+            return 0
+        fi
+    fi
+
     local resolved
     resolved="$(command -v "${cross_prefix}${tool_name}" 2>/dev/null || true)"
     resolved="$(validate_cross_tool_path "$resolved" "$cross_prefix" "$tool_name")"
