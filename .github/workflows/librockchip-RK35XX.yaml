@@ -11,7 +11,7 @@ jobs:
     name: Build and Release
     runs-on: ubuntu-latest
     container:
-      image: ubuntu:17.04
+      image: ubuntu:20.04
       options: --user root
     env:
       OUTPUT_ROOT: outputs/librockchip_rk35xx
@@ -22,16 +22,12 @@ jobs:
           export DEBIAN_FRONTEND=noninteractive
           export TZ=Etc/UTC
           if command -v sudo >/dev/null 2>&1; then
-            sudo sed -i 's|http://archive.ubuntu.com/ubuntu|http://old-releases.ubuntu.com/ubuntu|g' /etc/apt/sources.list
-            sudo sed -i 's|http://security.ubuntu.com/ubuntu|http://old-releases.ubuntu.com/ubuntu|g' /etc/apt/sources.list
             sudo ln -fs /usr/share/zoneinfo/"$TZ" /etc/localtime
             sudo apt-get update
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tzdata
             sudo dpkg-reconfigure --frontend noninteractive tzdata
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y git build-essential unzip curl wget ninja-build pkg-config python3 python3-pip python3-venv
           else
-            sed -i 's|http://archive.ubuntu.com/ubuntu|http://old-releases.ubuntu.com/ubuntu|g' /etc/apt/sources.list
-            sed -i 's|http://security.ubuntu.com/ubuntu|http://old-releases.ubuntu.com/ubuntu|g' /etc/apt/sources.list
             ln -fs /usr/share/zoneinfo/"$TZ" /etc/localtime
             apt-get update
             DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tzdata
@@ -55,8 +51,31 @@ jobs:
       - name: 安装交叉编译工具链
         shell: bash
         run: |
-          chmod +x install_toolchain.sh
-          ALLOW_ROOT=1 ./install_toolchain.sh --gnu-only --skip-test
+          set -euo pipefail
+          TOOLCHAIN_ROOT=/opt/toolchains
+          mkdir -p "$TOOLCHAIN_ROOT"
+          cd "$TOOLCHAIN_ROOT"
+
+          if [ ! -d gcc-linaro-6.3.1-2017.05-x86_64_aarch64-linux-gnu ]; then
+            git clone --depth 1 https://github.com/rockchip-toybrick/gcc-linaro-6.3.1-2017.05-x86_64_aarch64-linux-gnu.git
+          fi
+
+          if [ ! -d gcc-linaro-6.3.1-2017.05-x86_64_arm-linux-gnueabihf ]; then
+            git clone --depth 1 https://github.com/rockchip-toybrick/gcc-linaro-6.3.1-2017.05-x86_64_arm-linux-gnueabihf.git
+          fi
+
+          AARCH64_TOOLCHAIN_BIN="$TOOLCHAIN_ROOT/gcc-linaro-6.3.1-2017.05-x86_64_aarch64-linux-gnu/bin"
+          ARMHF_TOOLCHAIN_BIN="$TOOLCHAIN_ROOT/gcc-linaro-6.3.1-2017.05-x86_64_arm-linux-gnueabihf/bin"
+
+          echo "$AARCH64_TOOLCHAIN_BIN" >> "$GITHUB_PATH"
+          echo "$ARMHF_TOOLCHAIN_BIN" >> "$GITHUB_PATH"
+          echo "AARCH64_LINUX_GNU_TOOLCHAIN=$TOOLCHAIN_ROOT/gcc-linaro-6.3.1-2017.05-x86_64_aarch64-linux-gnu" >> "$GITHUB_ENV"
+          echo "ARM_LINUX_GNUEABIHF_TOOLCHAIN=$TOOLCHAIN_ROOT/gcc-linaro-6.3.1-2017.05-x86_64_arm-linux-gnueabihf" >> "$GITHUB_ENV"
+
+          export PATH="$AARCH64_TOOLCHAIN_BIN:$ARMHF_TOOLCHAIN_BIN:$PATH"
+
+          aarch64-linux-gnu-gcc --version
+          arm-linux-gnueabihf-gcc --version
 
       - name: 准备 librockchip 构建脚本
         shell: bash
