@@ -11,7 +11,7 @@ jobs:
     name: Build and Release
     runs-on: ubuntu-latest
     container:
-      image: ubuntu:focal-20200423
+      image: ubuntu:17.04
       options: --user root
     env:
       OUTPUT_ROOT: outputs/librockchip_rk35xx
@@ -45,20 +45,8 @@ jobs:
         shell: bash
         run: |
           python3 -m pip install --upgrade pip
-          python3 -m pip install meson cmake
-
-      - name: Setup Android NDK
-        id: setup-ndk
-        uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r25c
-          local-cache: true
-          add-to-path: true
-
-      - name: 导出 ANDROID_NDK_HOME
-        if: steps.setup-ndk.outputs.ndk-path != ''
-        shell: bash
-        run: echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> "$GITHUB_ENV"
+          python3 -m pip install cmake==3.28
+          python3 -m pip install meson
 
       - name: 安装交叉编译工具链
         shell: bash
@@ -81,6 +69,19 @@ jobs:
       - name: 构建 librockchip RK35XX (arm-linux-gnueabihf)
         shell: bash
         run: ./scripts/librockchip/build_rk35xx.sh arm-linux-gnueabihf
+
+      - name: Setup Android NDK
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r25c
+          local-cache: true
+          add-to-path: true
+
+      - name: 导出 ANDROID_NDK_HOME
+        if: steps.setup-ndk.outputs.ndk-path != ''
+        shell: bash
+        run: echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> "$GITHUB_ENV"
 
       - name: 构建 librockchip RK35XX (aarch64-linux-android)
         shell: bash
