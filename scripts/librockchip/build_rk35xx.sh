@@ -229,6 +229,64 @@ process_target() {
 	log_success "Completed processing for $target_name"
 }
 
+fetch_latest_rknpu2_version() {
+	local api_url="https://api.github.com/repos/airockchip/rknn-toolkit2/releases/latest"
+	local response
+
+	if ! response="$(curl -L --fail --silent "$api_url")"; then
+		log_error "Failed to fetch rknpu2 release information from $api_url"
+		return 1
+	fi
+
+	local tag_name
+	tag_name="$(printf '%s\n' "$response" | awk -F '"' '/"tag_name"/ {print $4; exit}')"
+
+	if [ -z "$tag_name" ]; then
+		log_error "Could not parse tag_name from rknpu2 release information"
+		return 1
+	fi
+
+	echo "$tag_name"
+}
+
+generate_release_manifest() {
+	local release_file="${AGGREGATE_ROOT}/release.txt"
+	local temp_file
+	temp_file="$(mktemp "${release_file}.XXXXXX")"
+
+	local rknpu2_tag
+	if ! rknpu2_tag="$(fetch_latest_rknpu2_version)"; then
+		rm -f "$temp_file"
+		return 1
+	fi
+
+	echo "rknpu2=${rknpu2_tag}" > "$temp_file"
+
+	local component
+	for component in "${DEPENDENCIES[@]}"; do
+		local version_ini="${OUTPUTS_DIR}/${component}/version.ini"
+		if [ ! -f "$version_ini" ]; then
+			rm -f "$temp_file"
+			log_error "Missing version.ini for $component: $version_ini"
+			return 1
+		fi
+
+		local version_value
+		version_value="$(awk -F '=' '/^[[:space:]]*version[[:space:]]*=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}' "$version_ini")"
+
+		if [ -z "$version_value" ]; then
+			rm -f "$temp_file"
+			log_error "Unable to determine version for $component from $version_ini"
+			return 1
+		fi
+
+		echo "${component}=${version_value}" >> "$temp_file"
+	done
+
+	mv "$temp_file" "$release_file"
+	log_success "Generated release manifest: $release_file"
+}
+
 select_target_configs() {
 	local -n selected_configs_ref="$1"
 
@@ -291,6 +349,11 @@ main() {
 			exit 1
 		fi
 	done
+
+	if ! generate_release_manifest; then
+		log_error "Failed to generate release manifest"
+		exit 1
+	fi
 
 	log_success "All requested targets processed successfully"
 }
