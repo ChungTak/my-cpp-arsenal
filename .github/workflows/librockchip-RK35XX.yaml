@@ -11,7 +11,7 @@ jobs:
     name: Build and Release
     runs-on: ubuntu-latest
     container:
-      image: ubuntu:18.04
+      image: ubuntu:18.10
       options: --user root
     env:
       OUTPUT_ROOT: outputs/librockchip_rk35xx
