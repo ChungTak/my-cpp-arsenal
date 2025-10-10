@@ -249,6 +249,26 @@ fetch_latest_rknpu2_version() {
 	echo "$tag_name"
 }
 
+extract_dependency_version() {
+	local version_ini="$1"
+
+	awk -F '=' '
+		{
+			key = $1
+			gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
+			if (tolower(key) == "version") {
+				value = $2
+				gsub(/\r/, "", value)
+				gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+				if (value != "") {
+					print value
+					exit
+				}
+			}
+		}
+	' "$version_ini"
+}
+
 generate_release_manifest() {
 	local release_file="${AGGREGATE_ROOT}/release.txt"
 	local temp_file
@@ -266,18 +286,16 @@ generate_release_manifest() {
 	for component in "${DEPENDENCIES[@]}"; do
 		local version_ini="${OUTPUTS_DIR}/${component}/version.ini"
 		if [ ! -f "$version_ini" ]; then
-			rm -f "$temp_file"
-			log_error "Missing version.ini for $component: $version_ini"
-			return 1
+			log_warning "Missing version.ini for $component: $version_ini, skipping"
+			continue
 		fi
 
 		local version_value
-		version_value="$(awk -F '=' '/^[[:space:]]*version[[:space:]]*=/ {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}' "$version_ini")"
+		version_value="$(extract_dependency_version "$version_ini")"
 
 		if [ -z "$version_value" ]; then
-			rm -f "$temp_file"
-			log_error "Unable to determine version for $component from $version_ini"
-			return 1
+			log_warning "Unable to determine version for $component from $version_ini, skipping"
+			continue
 		fi
 
 		echo "${component}=${version_value}" >> "$temp_file"
