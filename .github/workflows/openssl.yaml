@@ -1,6 +1,6 @@
 name: Build OpenSSL
 
-on:
+'on':
   workflow_dispatch:
     inputs:
       openssl_version:
