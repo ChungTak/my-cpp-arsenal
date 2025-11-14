@@ -1,0 +1,164 @@
+name: Build OpenSSL
+
+on:
+  workflow_dispatch:
+    inputs:
+      openssl_version:
+        description: 'OpenSSL version to build (default: 3.5.4)'
+        required: false
+        default: '3.5.4'
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build and Release
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:18.10
+      options: --user root
+    env:
+      OUTPUT_ROOT: outputs/openssl
+    steps:
+      - name: 准备容器环境
+        shell: bash
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          export TZ=Etc/UTC
+          if command -v sudo >/dev/null 2>&1; then
+            sudo sed -i 's|http://archive.ubuntu.com/ubuntu|http://old-releases.ubuntu.com/ubuntu|g' /etc/apt/sources.list
+            sudo sed -i 's|http://security.ubuntu.com/ubuntu|http://old-releases.ubuntu.com/ubuntu|g' /etc/apt/sources.list
+            sudo ln -fs /usr/share/zoneinfo/"$TZ" /etc/localtime
+            sudo apt-get update
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tzdata
+            sudo dpkg-reconfigure --frontend noninteractive tzdata
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y git build-essential unzip curl wget ninja-build pkg-config python3 python3-pip python3-venv
+          else
+            sed -i 's|http://archive.ubuntu.com/ubuntu|http://old-releases.ubuntu.com/ubuntu|g' /etc/apt/sources.list
+            sed -i 's|http://security.ubuntu.com/ubuntu|http://old-releases.ubuntu.com/ubuntu|g' /etc/apt/sources.list
+            ln -fs /usr/share/zoneinfo/"$TZ" /etc/localtime
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tzdata
+            dpkg-reconfigure --frontend noninteractive tzdata
+            DEBIAN_FRONTEND=noninteractive apt-get install -y git build-essential unzip curl wget ninja-build pkg-config python3 python3-pip python3-venv
+          fi
+
+      - name: 检出仓库
+        uses: actions/checkout@v4
+        with:
+          repository: ChungTak/my-cpp-arsenal
+          submodules: true
+
+      - name: 安装交叉编译工具链
+        shell: bash
+        run: |
+          chmod +x install_toolchain.sh
+          ALLOW_ROOT=1 ./install_toolchain.sh --gnu-only --skip-test
+
+      - name: 准备 OpenSSL 构建脚本
+        shell: bash
+        run: chmod +x scripts/openssl/build.sh
+
+      - name: 设置 OpenSSL 版本
+        shell: bash
+        run: echo "OPENSSL_VERSION=${{ github.event.inputs.openssl_version }}" >> "$GITHUB_ENV"
+
+      - name: 构建 OpenSSL (aarch64-linux-gnu)
+        shell: bash
+        run: ./scripts/openssl/build.sh aarch64-linux-gnu
+
+      - name: 构建 OpenSSL (arm-linux-gnueabihf)
+        shell: bash
+        run: ./scripts/openssl/build.sh arm-linux-gnueabihf
+
+      - name: 构建 OpenSSL (x86_64-linux-gnu)
+        shell: bash
+        run: ./scripts/openssl/build.sh x86_64-linux-gnu
+
+      - name: Setup Android NDK
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r25c
+          local-cache: true
+          add-to-path: true
+
+      - name: 导出 ANDROID_NDK_HOME
+        if: steps.setup-ndk.outputs.ndk-path != ''
+        shell: bash
+        run: echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> "$GITHUB_ENV"
+
+      - name: 构建 OpenSSL (aarch64-linux-android)
+        shell: bash
+        run: ./scripts/openssl/build.sh aarch64-linux-android
+
+      - name: 构建 OpenSSL (arm-linux-android)
+        shell: bash
+        run: ./scripts/openssl/build.sh arm-linux-android
+
+      - name: 压缩构建产物
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$OUTPUT_ROOT"
+          for dir in aarch64-linux-gnu arm-linux-gnueabihf x86_64-linux-gnu aarch64-linux-android arm-linux-android; do
+            if [ ! -d "$dir" ]; then
+              echo "::error::缺少目录 $OUTPUT_ROOT/$dir" >&2
+              exit 1
+            fi
+            tar -czf "$dir.tar.gz" "$dir"
+          done
+
+      - name: 生成版本信息
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 获取 OpenSSL 版本
+          openssl_version="${{ github.event.inputs.openssl_version }}"
+          echo "version=$openssl_version" >> "$GITHUB_OUTPUT"
+          echo "release_tag=openssl-$openssl_version" >> "$GITHUB_OUTPUT"
+          
+          # 创建发布说明
+          release_file="$OUTPUT_ROOT/release.txt"
+          cat > "$release_file" << EOF
+OpenSSL ${{ github.event.inputs.openssl_version }} 预编译库
+
+构建目标平台:
+- aarch64-linux-gnu (ARM64 Linux GNU)
+- arm-linux-gnueabihf (ARM Linux GNU EABI HF)
+- x86_64-linux-gnu (x86_64 Linux GNU)
+- aarch64-linux-android (ARM64 Android)
+- arm-linux-android (ARM Android)
+
+构建配置:
+- 静态库 (no-shared)
+- 无测试 (no-tests)
+- Release 模式
+
+包含内容:
+- 头文件 (include/)
+- 库文件 (lib/)
+- SSL 配置 (ssl/)
+
+构建时间: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+GitHub Actions 运行: ${{ github.run_id }}
+EOF
+
+      - name: 发布 Release
+        uses: ncipollo/release-action@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ steps.version.outputs.release_tag }}
+          name: OpenSSL-${{ github.event.inputs.openssl_version }}
+          bodyFile: outputs/openssl/release.txt
+          artifacts: |
+            outputs/openssl/aarch64-linux-gnu.tar.gz
+            outputs/openssl/arm-linux-gnueabihf.tar.gz
+            outputs/openssl/x86_64-linux-gnu.tar.gz
+            outputs/openssl/aarch64-linux-android.tar.gz
+            outputs/openssl/arm-linux-android.tar.gz
+          allowUpdates: true
+          replacesArtifacts: true
