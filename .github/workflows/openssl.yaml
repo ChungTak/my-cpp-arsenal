@@ -123,29 +123,27 @@ jobs:
           
           # 创建发布说明
           release_file="$OUTPUT_ROOT/release.txt"
-          cat > "$release_file" << EOF
-OpenSSL ${{ github.event.inputs.openssl_version }} 预编译库
-
-构建目标平台:
-- aarch64-linux-gnu (ARM64 Linux GNU)
-- arm-linux-gnueabihf (ARM Linux GNU EABI HF)
-- x86_64-linux-gnu (x86_64 Linux GNU)
-- aarch64-linux-android (ARM64 Android)
-- arm-linux-android (ARM Android)
-
-构建配置:
-- 静态库 (no-shared)
-- 无测试 (no-tests)
-- Release 模式
-
-包含内容:
-- 头文件 (include/)
-- 库文件 (lib/)
-- SSL 配置 (ssl/)
-
-构建时间: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
-GitHub Actions 运行: ${{ github.run_id }}
-EOF
+          echo "OpenSSL ${{ github.event.inputs.openssl_version }} 预编译库" > "$release_file"
+          echo "" >> "$release_file"
+          echo "构建目标平台:" >> "$release_file"
+          echo "- aarch64-linux-gnu (ARM64 Linux GNU)" >> "$release_file"
+          echo "- arm-linux-gnueabihf (ARM Linux GNU EABI HF)" >> "$release_file"
+          echo "- x86_64-linux-gnu (x86_64 Linux GNU)" >> "$release_file"
+          echo "- aarch64-linux-android (ARM64 Android)" >> "$release_file"
+          echo "- arm-linux-android (ARM Android)" >> "$release_file"
+          echo "" >> "$release_file"
+          echo "构建配置:" >> "$release_file"
+          echo "- 静态库 (no-shared)" >> "$release_file"
+          echo "- 无测试 (no-tests)" >> "$release_file"
+          echo "- Release 模式" >> "$release_file"
+          echo "" >> "$release_file"
+          echo "包含内容:" >> "$release_file"
+          echo "- 头文件 (include/)" >> "$release_file"
+          echo "- 库文件 (lib/)" >> "$release_file"
+          echo "- SSL 配置 (ssl/)" >> "$release_file"
+          echo "" >> "$release_file"
+          echo "构建时间: $(date -u +"%Y-%m-%d %H:%M:%S UTC")" >> "$release_file"
+          echo "GitHub Actions 运行: ${{ github.run_id }}" >> "$release_file"
 
       - name: 发布 Release
         uses: ncipollo/release-action@v1
